@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Record - Power Kettle</title>
+<link rel="stylesheet" href="css/base.css">
+</head>
+<body>
+<main>
+  <h1>Record</h1>
+  <p><a href="index.html">Home</a></p>
+
+  <div id="bt-missing" class="banner" hidden>Use Chrome on Android or desktop. This browser has no Web Bluetooth.</div>
+  <div id="low-battery" class="banner" hidden>Low battery. Charge the kettle sensor soon.</div>
+
+  <section class="card">
+    <h2>Connection</h2>
+    <p id="conn-state">Not connected</p>
+    <div class="row">
+      <button id="connect" class="primary" type="button">Connect</button>
+    </div>
+  </section>
+
+  <section class="card" aria-label="Live readouts">
+    <dl class="readouts">
+      <div class="readout"><dt>Battery</dt><dd id="r-battery">-</dd></div>
+      <div class="readout"><dt>Samples</dt><dd id="r-samples">0</dd></div>
+      <div class="readout"><dt>Rate (Hz)</dt><dd id="r-rate">-</dd></div>
+      <div class="readout"><dt>Gaps</dt><dd id="r-gaps">0</dd></div>
+      <div class="readout"><dt>Dropped</dt><dd id="r-dropped">-</dd></div>
+      <div class="readout"><dt>Duration</dt><dd id="r-duration">0:00</dd></div>
+    </dl>
+  </section>
+
+  <section class="card">
+    <div class="row">
+      <button id="start" class="primary" type="button" disabled>Start recording</button>
+      <button id="stop" class="danger" type="button" disabled>Stop &amp; save</button>
+    </div>
+    <p id="message" role="status" aria-live="polite"></p>
+  </section>
+
+  <section class="card">
+    <h2>Markers (tap before each set)</h2>
+    <div id="markers" class="markers"></div>
+    <form id="marker-free" class="marker-free">
+      <input id="marker-text" type="text" placeholder="Free-text marker" autocomplete="off" aria-label="Free-text marker">
+      <button id="marker-add" type="submit" disabled>Add</button>
+    </form>
+  </section>
+</main>
+<script type="module" src="js/record-page.js"></script>
+</body>
+</html>
