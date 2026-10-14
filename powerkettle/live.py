@@ -7,7 +7,8 @@ authoritative (it is what gets stored); live events are a preview of it.
 Approach
 --------
 All samples are kept, scaled as they arrive. Until the first still window is found
-(``calibration.find_still_window``, searched incrementally) nothing else happens. Then, whenever
+(``calibration.find_still_window``, searched incrementally) nothing else happens; from then
+on the accelerometer is also corrected by g / |g measured| (as ``analyse_run`` does). Then, whenever
 at least ``PROCESS_EVERY_S`` of new data has arrived, the stages from orientation to power
 (``pipeline.motion_stages``) are re-run on a window from a *checkpoint* to the newest sample,
 never on the whole session. The window's orientation starts from the orientation, working gyro
@@ -98,7 +99,7 @@ from .anchors import Anchor, _forward_chain, _static_windows, sagittal_tilt
 from .bell import BellProfile
 from .calibration import SMOOTH_SECONDS, Calibration, CalibrationError, calibrate, find_still_window
 from .classify import classify, rep_features
-from .imu import GAP_GUARD_SAMPLES, ImuData, scale_run
+from .imu import GAP_GUARD_SAMPLES, G, ImuData, scale_run
 from .integrate import power, segment_position, segment_velocity
 from .metrics import set_metrics
 from .orientation import GAP_INTERP_MAX_S, static_mask
@@ -148,6 +149,7 @@ class LiveAnalyser:
         self._last_tick = 0  # rows at the last tick
         # calibration
         self._calib: Calibration | None = None
+        self._acc_k = 1.0  # accelerometer scale correction g / g_measured, once calibrated
         self._failed = False
         self._cal_from = 0  # first row a still window not yet rejected may start at
         # window and event state (global row indices)
@@ -192,7 +194,7 @@ class LiveAnalyser:
                             self.gyro_range_dps))
         sl = slice(row0, rows)
         self._raw[sl], self._present[sl] = raw, True
-        self._acc[sl], self._gyro[sl] = imu.acc, imu.gyro
+        self._acc[sl], self._gyro[sl] = imu.acc * self._acc_k, imu.gyro
         self._valid[sl], self._sat[sl] = True, imu.saturated
         self._n = rows
         self._apply_gap_guards(row0)
@@ -272,6 +274,8 @@ class LiveAnalyser:
         except CalibrationError as e:
             self._failed = True
             return [{"type": "calibration", "ok": False, "warnings": [str(e)]}]
+        self._acc_k = G / self._calib.g_measured  # as pipeline.analyse_run (correct_acc_scale)
+        self._acc[:self._n] *= self._acc_k
         return [{"type": "calibration", "ok": True, "warnings": list(self._calib.warnings)}]
 
     def _process(self) -> list[dict]:

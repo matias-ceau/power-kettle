@@ -2,10 +2,16 @@
 
 From the first still window of a recording: gyro bias, bell-up and outward axes in the sensor
 frame, the COM -> sensor lever arm in the sensor frame, and the initial orientation
-(world <- sensor, world z up, athlete forward = world +x). Stdlib + numpy only.
+(world <- sensor, world z up, athlete forward = world +x).
+
+The magnitude of the mean specific force at rest, ``g_measured``, should be g; beyond
+``g_tolerance`` a warning is issued, and the pipeline divides it out (``correct_acc_scale``)
+before every later stage, so an accelerometer scale error does not bias power and the
+static tests (|f| within 5 % of g) keep working. Stdlib + numpy only.
 """
 from __future__ import annotations
 
+import dataclasses
 import math
 from dataclasses import dataclass, field
 
@@ -93,6 +99,12 @@ def find_still_window(imu: ImuData, cfg: CalibrationConfig = CalibrationConfig()
         f"no still window of {cfg.still_seconds:.1f} s found (|gyro| < {cfg.gyro_still_max} rad/s, "
         f"|acc| steady within {100 * cfg.acc_still_tol:.0f} %): start the recording with the bell "
         "standing still on the floor")
+
+
+def correct_acc_scale(imu: ImuData, calib: Calibration) -> ImuData:
+    """`imu` with the accelerometer scaled by g / ``calib.g_measured`` (|f| at rest becomes g);
+    the input is not modified."""
+    return dataclasses.replace(imu, acc=imu.acc * (G / calib.g_measured))
 
 
 def _initial_orientation(up_s: np.ndarray, out_s: np.ndarray) -> np.ndarray:

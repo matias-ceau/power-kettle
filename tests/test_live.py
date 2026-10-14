@@ -252,3 +252,20 @@ def test_index_going_backwards_rejected():
     live.feed(0, run.raw[:CHUNK])
     with pytest.raises(ValueError, match="backwards"):
         live.feed(5, run.raw[5:5 + CHUNK])
+
+
+def live_matches_batch(run, truth, power_rel=0.01):
+    """Feed `run`; the live reps match the batch reps (kind, hand, power) and truth's kinds."""
+    events, _ = feed_all(live_for(run), run)
+    batch = analyse_run(run)
+    reps, ref = [e for _, e in of_type(events, "rep")], batch_reps(batch)
+    assert [(r.kind, r.hand) for r in ref] == [(t.kind, t.hand) for t in truth.reps]
+    assert [(e["kind"], e["hand"]) for e in reps] == [(r.kind, r.hand) for r in ref]
+    for j, (e, r) in enumerate(zip(reps, ref)):
+        assert e["power_w"] == pytest.approx(r.power_w, rel=power_rel), j
+    return events, batch
+
+
+def test_accelerometer_scale_corrected_live():
+    run, truth = simulate(SHORT, cfg=SimConfig(acc_scale=1.05))
+    live_matches_batch(run, truth)

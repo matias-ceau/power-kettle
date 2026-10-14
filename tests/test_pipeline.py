@@ -299,3 +299,21 @@ def test_cli_out_without_suffix_gets_npz(tmp_path, capsys):
     assert f"saved: {tmp_path / 'o.npz'}" in out
     assert f"saved: {tmp_path / 'o.run1.npz'}" in out
     assert sorted(p.name for p in tmp_path.glob("o*")) == ["o.npz", "o.run1.npz"]
+
+
+# ----------------------------------------------------------------------------- I4: acc scale
+SCALE_SESSION = [Rest(3), Swing(12), Rest(5), Snatch(10, "R"), Rest(3)]
+
+
+@pytest.mark.parametrize("scale", [0.95, 0.97, 1.03, 1.05])
+def test_accelerometer_scale_error_corrected(scale):
+    """An accelerometer reading `scale` × specific force: calibration measures |g| at rest and
+    the pipeline divides it out (the warning stays), so reps, kinds and power match truth."""
+    run, truth = simulate(SCALE_SESSION, cfg=SimConfig(acc_scale=scale))
+    res = analyse_run(run)
+    reps = reps_of(res)
+    assert [(r.kind, r.hand) for r in reps] == [(t.kind, t.hand) for t in truth.reps]
+    assert any("accelerometer magnitude" in w for w in res.warnings)
+    for kind in ("swing", "snatch"):
+        true_avg = np.mean([t.power_w for t in truth.reps if t.kind == kind])
+        assert res.metrics.by_kind[kind].avg == pytest.approx(true_avg, rel=0.02), kind

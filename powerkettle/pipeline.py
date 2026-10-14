@@ -1,6 +1,7 @@
 """End-to-end analysis of one run (spec §5–7): the production chain of every stage.
 
 ``analyse_run`` scales the run, calibrates (or carries a previous run's calibration over),
+divides the accelerometer by the |g| measured at rest (``calibration.correct_acc_scale``),
 estimates orientation and COM acceleration, finds anchors, integrates velocity / position (twice:
 before and after ``refine_rests``), computes power, builds and classifies reps and sets, applies
 label corrections, fills each rep's athlete-frame path and computes set and session metrics.
@@ -33,7 +34,13 @@ import numpy as np
 
 from .anchors import Anchor, AnchorConfig, detect_anchors, refine_rests, set_forwards
 from .bell import BellProfile
-from .calibration import Calibration, CalibrationConfig, CalibrationError, calibrate
+from .calibration import (
+    Calibration,
+    CalibrationConfig,
+    CalibrationError,
+    calibrate,
+    correct_acc_scale,
+)
 from .classify import ClassifierConfig
 from .imu import ImuData, scale_run
 from .integrate import power, segment_position, segment_velocity
@@ -208,6 +215,7 @@ def analyse_run(run: Run, bell: BellProfile = BellProfile(),
     warnings += calib.warnings
     if not run.rate_estimated:
         warnings.append(WARN_NOMINAL_RATE)
+    imu = correct_acc_scale(imu, calib)
 
     m = motion_stages(imu, calib, bell, cfg)
     q, v, pos, anchors = m.q, m.v, m.pos, m.anchors
