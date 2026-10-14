@@ -19,10 +19,14 @@ std::atomic<uint16_t> g_mtu{0};
 
 class ServerCallbacks : public NimBLEServerCallbacks {
   void onConnect(NimBLEServer*, NimBLEConnInfo& info) override {
-    g_mtu = info.getMTU();  // 23 until the central runs the MTU exchange
+    g_mtu = info.getMTU();  // 23 until an MTU exchange completes
     g_conn = info.getConnHandle();
     Serial.printf("[ble] connected %s, mtu %u\n", info.getAddress().toString().c_str(),
                   info.getMTU());
+    // setMTU() only sets the value offered in an exchange; not every central
+    // starts one, so the peripheral does. The result arrives in onMTUChange.
+    int rc = ble_gattc_exchange_mtu(info.getConnHandle(), nullptr, nullptr);
+    if (rc != 0) Serial.printf("[ble] mtu exchange not started, rc %d\n", rc);
   }
 
   void onDisconnect(NimBLEServer*, NimBLEConnInfo&, int reason) override {
