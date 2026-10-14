@@ -1,3 +1,4 @@
+import warnings
 from types import SimpleNamespace
 
 import numpy as np
@@ -223,6 +224,22 @@ def test_velocity_nan_makes_whole_segment_nan():
     assert np.max(np.abs(v[:101, 0] - np.sin(np.pi * t[:101]))) < 1e-3
 
 
+def test_velocity_nan_segment_covers_its_rest_edges():
+    """A NaN segment is NaN on the rest edges it owns too (they are integrated, not known);
+    the rest core and lockouts stay 0."""
+    n = 301
+    t = _t(n)
+    a = np.zeros((n, 3))
+    a[150, 0] = np.nan
+    anchors = [Anchor(0, 99, "rest"), Anchor(200, 200, "low"), Anchor(220, 239, "top_lockout"),
+               Anchor(260, 260, "low")]
+    v = segment_velocity(a, t, anchors)
+    assert np.all(v[:80] == 0.0)  # leading edge (no segment) and core
+    assert np.all(np.isnan(v[80:200]))  # trailing rest edge + segment
+    assert np.all(v[200] == 0.0) and np.all(v[220:240] == 0.0)
+    assert np.all(np.isfinite(v[200:261])) and np.all(np.isnan(v[261:]))
+
+
 def test_velocity_without_anchors_is_nan():
     v = segment_velocity(np.zeros((10, 3)), _t(10), [])
     assert v.shape == (10, 3) and np.all(np.isnan(v))
@@ -277,6 +294,14 @@ def test_concentric_power_is_work_over_duration():
     assert concentric_power(P, t, 20, 60) == pytest.approx(48.0 / 0.4)
 
 
+def test_concentric_power_degenerate_window_is_nan():
+    t = _t(10)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        assert np.isnan(concentric_power(np.ones(10), t, 4, 4))
+        assert np.isnan(concentric_power(np.ones(10), t, 5, 4))
+
+
 # ----------------------------------------------------------------------------- refine_rests
 def test_refine_rests_synthetic():
     n = 400
@@ -292,3 +317,26 @@ def test_refine_rests_synthetic():
     assert [a.kind for a in anchors][2] == "rest"  # input not modified
     pos[100:150, 2] = np.nan  # unknown height: not refined
     assert refine_rests(anchors, pos, AnchorConfig())[2].kind == "rest"
+
+
+def _bump(t, t0, dur, dist):
+    """Velocity sin² bump over [t0, t0 + dur] covering `dist` metres."""
+    u = np.clip((t - t0) / dur, 0.0, 1.0)
+    return 2.0 * dist / dur * np.sin(np.pi * u) ** 2
+
+
+def test_refine_rests_second_quiet_rest_measured_from_the_low():
+    """low -> quiet rest 1.5 m up -> +0.1 m -> quiet rest: once the first is refined, position
+    restarts at its core end, so the second must add the first's height (1.6 m above the low)."""
+    n = 260
+    t = _t(n)
+    v = np.zeros((n, 3))
+    v[:, 2] = _bump(t, 0.10, 0.30, 1.5) + _bump(t, 1.20, 0.30, 0.1)
+    anchors = [Anchor(10, 10, "low"), Anchor(40, 119, "rest"), Anchor(150, 229, "rest")]
+    pos = segment_position(v, t, anchors)
+    assert pos[79, 2] == pytest.approx(1.5, abs=1e-3)
+    assert pos[189, 2] == pytest.approx(0.1, abs=1e-3)  # relative to the first rest's core end
+    out = refine_rests(anchors, pos, AnchorConfig())
+    assert [a.kind for a in out] == ["low", "top_lockout", "top_lockout"]
+    lower = refine_rests(anchors, pos, AnchorConfig(floor_max_height_m=1.55))
+    assert [a.kind for a in lower] == ["low", "rest", "rest"]  # 1.5 < 1.55, then set ended

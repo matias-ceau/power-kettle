@@ -11,9 +11,9 @@ from v = 0, then the linear ramp in time that brings the end value back to zero 
 
 so any constant acceleration error (a small tilt error leaking gravity, accelerometer bias) is
 removed exactly. Any NaN in a_com over a segment (invalid samples propagate NaN through
-``com_acceleration``) makes the segment's samples outside the anchor windows NaN: no velocity is
-guessed across a gap. Samples before the first anchor and after the last have no zero-velocity
-end: NaN.
+``com_acceleration``) makes the whole segment NaN, including the rest edges it would have
+integrated (rest cores and lockout windows stay 0): no velocity is guessed across a gap.
+Samples before the first anchor and after the last have no zero-velocity end: NaN.
 
 Rest edges: ``static_mask`` accepts |a| up to 0.05 g, so a rest window detected by
 ``detect_anchors`` also covers the first and last ~0.1 s of a slow lift or set-down (a smooth
@@ -76,8 +76,8 @@ def _fs(t: np.ndarray) -> float:
 def segment_velocity(a_com: np.ndarray, t: np.ndarray, anchors: list[Anchor]) -> np.ndarray:
     """(N, 3) COM velocity, m/s: zero on every anchor (points and windows; rest edges facing a
     segment are integrated, see the module docstring), integrated and linearly detrended
-    between consecutive anchors; NaN over the samples between two anchors when the segment holds
-    any NaN acceleration, and before the first / after the last anchor."""
+    between consecutive anchors; NaN over a segment (its rest edges included) that holds any NaN
+    acceleration, and before the first / after the last anchor."""
     a_com = np.asarray(a_com, dtype=float)
     t = np.asarray(t, dtype=float)
     fs = _fs(t)
@@ -91,7 +91,8 @@ def segment_velocity(a_com: np.ndarray, t: np.ndarray, anchors: list[Anchor]) ->
             continue  # adjacent zero-velocity samples: nothing between them
         seg_a, seg_t = a_com[s:e + 1], t[s:e + 1]
         if not np.all(np.isfinite(seg_a)):
-            continue  # NaN between the windows; the windows (rest edges too) stay at 0
+            v[s + 1:e] = np.nan  # its rest edges too; rest cores and lockouts stay at 0
+            continue
         raw = _cumtrapz(seg_a, seg_t)
         ramp = (seg_t - seg_t[0]) / (seg_t[-1] - seg_t[0])
         v[s + 1:e] = (raw - ramp[:, None] * raw[-1])[1:-1]
@@ -122,7 +123,10 @@ def power(a_com: np.ndarray, v: np.ndarray, mass_kg: float) -> np.ndarray:
 
 def concentric_power(P: np.ndarray, t: np.ndarray, i_low: int, i_top: int) -> float:
     """Mean power over [i_low, i_top] (inclusive), W: trapezoid work / duration (the
-    simulator's truth definition of rep power)."""
+    simulator's truth definition of rep power). Requires i_top > i_low; a degenerate window
+    (i_top <= i_low, zero duration) gives NaN."""
+    if i_top <= i_low:
+        return float("nan")
     p, tt = np.asarray(P, float)[i_low:i_top + 1], np.asarray(t, float)[i_low:i_top + 1]
     work = np.sum(0.5 * (p[1:] + p[:-1]) * np.diff(tt))
     return float(work / (tt[-1] - tt[0]))

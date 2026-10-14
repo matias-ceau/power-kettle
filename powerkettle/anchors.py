@@ -268,23 +268,26 @@ def refine_rests(anchors: list[Anchor], pos: np.ndarray,
     preceding low anchor of its set (a tremor-free overhead hold, which ``detect_anchors`` cannot
     tell from a floor rest). Height = pos z at the window's middle sample minus pos z at that
     low, with `pos` from ``integrate.segment_position`` on these anchors (inside a rest it stays
-    at the height reached on entering it). A rest whose set has no low before it (the anchor
-    before it is a rest, or none) or whose height is NaN stays a rest. Returns a new sorted
-    list; the input is not modified. Callers then re-run ``segment_velocity`` /
+    at the height reached on entering it). Position restarts at 0 at the end of every rest core,
+    so after a rest is re-labelled, later rests of the set add its height (running offset, reset
+    at each low). A rest whose set has no low before it (the anchor before it is a rest, or
+    none) or whose height is NaN stays a rest. Returns a new sorted list; the input is not
+    modified. Callers then re-run ``segment_velocity`` /
     ``segment_position`` once on the result (a lockout is a zero-velocity window over its full
     length and position no longer restarts after it)."""
     anchors = sorted(anchors)
     out: list[Anchor] = []
-    last_low: Anchor | None = None
+    base: float | None = None  # height of the current position origin above the set's low
     for a in anchors:
         if a.kind == "low":
-            last_low = a
+            base = -float(pos[a.i0, 2])  # 0 for segment_position (it restarts at lows)
         elif a.kind == "rest":
-            if last_low is not None:
-                height = float(pos[(a.i0 + a.i1) // 2, 2] - pos[last_low.i0, 2])
+            if base is not None:
+                height = base + float(pos[(a.i0 + a.i1) // 2, 2])
                 if height >= cfg.floor_max_height_m:  # False for NaN
                     out.append(Anchor(a.i0, a.i1, "top_lockout"))
+                    base = height  # segment_position restarted at 0 at this rest's core end
                     continue
-            last_low = None  # a (floor) rest ends the set
+            base = None  # a (floor) rest ends the set
         out.append(a)
     return out
