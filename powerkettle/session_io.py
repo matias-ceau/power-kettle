@@ -16,15 +16,20 @@ run's calibration, which cannot be rebuilt from its own samples, and a later run
 run's mounting, so ``reanalyse`` passes it back to ``analyse_run`` as ``prior_calib`` (its
 mounting is kept; gyro bias and q0 are re-derived from the run's own still window if any).
 
-Conventions for the meta written by the CLI: ``labels`` maps the rep index (JSON string key) to
-``{"kind", "hand"}``; ``markers`` is a list of ``{"phone_ms", "text", "sample_index"}``, the
-phone-clock markers already placed on the run's sample index (``pipeline.map_markers``), since
-the packet times needed to place them are not stored.
+Conventions for the meta written by the CLI: ``labels`` maps the sample index of the rep's low
+(JSON string key; ``pipeline`` module docstring) to ``{"kind", "hand"}``, and
+``labels_keyed_by`` = "low_sample_index" says so; ``markers`` is a list of
+``{"phone_ms", "text", "sample_index"}``, the phone-clock markers already placed on the run's
+sample index (``pipeline.map_markers``), since the packet times needed to place them are not
+stored.
 
 ``load_session`` fills meta fields missing from older or foreign files with defaults (labels {},
 markers [], app_version / algorithm_version / summary None, the default bell, rate_estimated
-False) and restores label keys to int. Statuses and packet times are not stored (the run's rate
-is). Stdlib + numpy only.
+False) and restores label keys to int. Labels of older files (no ``labels_keyed_by``) are keyed
+by the rep's index in the session: they are converted with the stored summary's rep list
+(index → its low's sample index) when present, otherwise dropped with a message in
+``meta["load_warnings"]`` (a list, empty when nothing happened; not saved). Statuses and packet
+times are not stored (the run's rate is). Stdlib + numpy only.
 """
 from __future__ import annotations
 
@@ -42,6 +47,7 @@ from .rawlog import Run
 
 META_DEFAULTS = {"labels": {}, "markers": [], "app_version": None, "algorithm_version": None,
                  "summary": None, "calibration": None}
+LABELS_KEYED_BY = "low_sample_index"
 _CALIB_VECTORS = ("gyro_bias", "up_s", "out_s", "lever_arm_s", "q0")
 
 
@@ -62,6 +68,22 @@ def calibration_from_dict(d: dict) -> Calibration:
                        warnings=list(d.get("warnings", [])))
 
 
+def _migrate_labels(labels: dict[int, dict], meta: dict, first_index: int) -> dict[int, dict]:
+    """Rep-index labels of an older file re-keyed by their rep's low sample index, from the
+    stored summary's reps ("index", "i_low" relative to the run's first sample); without it,
+    none (a message goes to ``meta["load_warnings"]``)."""
+    reps = (meta.get("summary") or {}).get("reps") or []
+    lows = {int(r["index"]): first_index + int(r["i_low"]) for r in reps
+            if r.get("index") is not None and r.get("i_low") is not None}
+    out = {lows[i]: lab for i, lab in labels.items() if i in lows}
+    lost = len(labels) - len(out)
+    if lost:
+        why = "no stored summary" if not lows else "rep index not in the stored summary"
+        meta["load_warnings"].append(
+            f"{lost} label(s) keyed by rep index dropped ({why}): re-label those reps")
+    return out
+
+
 def reanalyse(run: Run, bell: BellProfile, meta: dict,
               cfg: AnalysisConfig = AnalysisConfig()) -> SessionResult:
     """``analyse_run`` on a loaded session with its stored labels and, as ``prior_calib``, its
@@ -75,7 +97,8 @@ def save_session(path_or_buffer: str | os.PathLike | BinaryIO, run: Run, bell: B
                  meta: dict) -> None:
     """Write `run`, `bell` and `meta` (JSON-safe; NaN is rejected with ValueError)."""
     full = {**meta, "algorithm_version": ALGORITHM_VERSION, "bell": bell.to_dict(),
-            "rate_estimated": bool(run.rate_estimated)}
+            "rate_estimated": bool(run.rate_estimated), "labels_keyed_by": LABELS_KEYED_BY}
+    full.pop("load_warnings", None)
     full["labels"] = {str(k): v for k, v in full.get("labels", {}).items()}
     meta_json = json.dumps(full, allow_nan=False, separators=(",", ":"))
     np.savez_compressed(
@@ -101,8 +124,12 @@ def load_session(path_or_buffer: str | os.PathLike | BinaryIO) -> tuple[Run, Bel
             meta = json.loads(str(z["meta_json"]))
     except (KeyError, ValueError, EOFError, zipfile.BadZipFile) as e:
         raise ValueError(f"not a powerkettle .npz session: {e}") from None
-    meta = {**META_DEFAULTS, **meta}
-    meta["labels"] = {int(k): v for k, v in (meta["labels"] or {}).items()}
+    meta = {**META_DEFAULTS, **meta, "load_warnings": []}
+    labels = {int(k): v for k, v in (meta["labels"] or {}).items()}
+    if labels and meta.get("labels_keyed_by") != LABELS_KEYED_BY:
+        labels = _migrate_labels(labels, meta, int(sample_index[0]) if len(sample_index) else 0)
+    meta["labels"] = labels
+    meta["labels_keyed_by"] = LABELS_KEYED_BY
     bell = BellProfile.from_dict(meta["bell"]) if meta.get("bell") else BellProfile()
     run = Run(sample_index, raw, gaps, [], rate_hz, acc_g, gyro_dps,
               rate_estimated=bool(meta.get("rate_estimated", False)))

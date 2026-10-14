@@ -8,12 +8,16 @@ label corrections, fills each rep's athlete-frame path and computes set and sess
 
 Labels
 ------
-``labels`` maps a rep's session-wide index (0-based, in time order across sets) to
-``{"kind": …, "hand": …}`` (either key optional). A label overrides the classifier and adds the
+``labels`` maps the sensor sample index of a rep's low (``run.sample_index`` scale; JSON string
+key in a session file) to ``{"kind": …, "hand": …}`` (either key optional): a label applies to
+the rep whose low lies nearest to it, within ``LABEL_MATCH_S``, so it stays on its rep when a
+re-analysis finds one more or one fewer rep earlier in the session (a rep index would shift);
+two labels on one rep: the nearer wins. The rep's display index (``summary``, CLI) is its
+position in the session. A label overrides the classifier and adds the
 flag "relabelled". A kind other than snatch without a hand gets hand "-"; a snatch without a hand
 keeps the classifier's hand if it was already a snatch, else "?". A hand must fit the kind:
 L / R / ? for a snatch, "-" for swing and other; anything else (e.g. a hand-only label "L" on a
-rep classified swing) raises ValueError. Labels for indices past the reps found are ignored.
+rep classified swing) raises ValueError. Labels that match no rep are ignored.
 
 Markers
 -------
@@ -68,6 +72,7 @@ SNATCH_HANDS = ("L", "R", "?")  # a snatch's hand; swing and other always have "
 WARN_NOMINAL_RATE = "sample rate nominal (no status data)"
 WARN_CARRIED_CALIBRATION = "calibration carried over from previous run"
 PRE_CALIBRATION_WARN_S = 1.0  # more data than this before the calibration window: warning
+LABEL_MATCH_S = 0.3  # a label applies to the rep whose low lies nearest, at most this far
 GAP_TILT_MIN_S = 0.5  # anchored segment time needed to estimate the tilt error after a gap
 GAP_TILT_STATIC_S = 0.1  # the static window closing a gap region: gravity averaged this long
 GAP_TILT_MAX_ITER = 3  # tilt corrections after a gap, each on the anchors of the previous
@@ -300,11 +305,24 @@ def map_markers(run: Run, markers: list[tuple[float, str]]) -> list[tuple[int, s
     return out
 
 
-def _apply_labels(reps: list[Rep], labels: dict) -> None:
+def _match_labels(lows: list[int], labels: dict, max_dist: float) -> dict[int, dict]:
+    """{rep position: label} for the labels (keyed by a low's sample index) whose nearest low in
+    `lows` (sample indices) lies within `max_dist` samples; the nearer label wins a rep."""
+    best: dict[int, tuple[float, dict]] = {}
+    if not lows:
+        return {}
+    arr = np.asarray(lows, dtype=float)
     for key, lab in labels.items():
-        i = int(key)
-        if not 0 <= i < len(reps):
-            continue  # a label for a rep this analysis did not find
+        d = np.abs(arr - int(key))
+        i = int(np.argmin(d))
+        if d[i] <= max_dist and (i not in best or d[i] < best[i][0]):
+            best[i] = (float(d[i]), lab)
+    return {i: lab for i, (_, lab) in best.items()}
+
+
+def _apply_labels(reps: list[Rep], labels: dict, first_index: int, fs: float) -> None:
+    matched = _match_labels([first_index + r.i_low for r in reps], labels, LABEL_MATCH_S * fs)
+    for i, lab in sorted(matched.items()):
         r = reps[i]
         kind = lab.get("kind", r.kind)
         if kind not in KINDS:
@@ -347,7 +365,7 @@ def analyse_run(run: Run, bell: BellProfile = BellProfile(),
     sets = build_sets(anchors, imu, q, calib, v, pos, m.P, cfg.classifier, m.suspect)
     reps = [r for s in sets for r in s.reps]
     if labels:
-        _apply_labels(reps, labels)
+        _apply_labels(reps, labels, imu.first_index, imu.fs)
 
     bounds = segment_sets(anchors)  # one per run of non-rest anchors, as set_forwards
     hints = set_forwards(q, calib, anchors, cfg.anchors, imu, m.kin)

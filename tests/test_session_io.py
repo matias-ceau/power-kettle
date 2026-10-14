@@ -15,8 +15,8 @@ from powerkettle.session_io import (
 )
 from powerkettle.simulate import Rest, Snatch, Swing, simulate
 
-LABELS = {3: {"kind": "other"}, 7: {"kind": "snatch", "hand": "L"}}
 BELL = BellProfile(mass_kg=24.0, circumference_cm=58.5)
+REP_LABELS = {3: {"kind": "other"}, 7: {"kind": "snatch", "hand": "L"}}  # by rep index
 
 
 @pytest.fixture(scope="module")
@@ -25,7 +25,14 @@ def run():
     return r
 
 
-def test_roundtrip_exact(run, tmp_path):
+@pytest.fixture(scope="module")
+def LABELS(run):
+    """REP_LABELS keyed by the sample index of the rep's low."""
+    reps = [r for s in analyse_run(run, BELL).sets for r in s.reps]
+    return {int(run.sample_index[0]) + reps[i].i_low: lab for i, lab in REP_LABELS.items()}
+
+
+def test_roundtrip_exact(run, LABELS, tmp_path):
     meta = {"labels": LABELS, "markers": [{"phone_ms": 1.5, "text": "go", "sample_index": 12}],
             "app_version": "powerkettle-record/1"}
     save_session(tmp_path / "s.npz", run, BELL, meta)
@@ -69,8 +76,9 @@ def test_gaps_roundtrip(run):
     assert run2.gaps == gaps and all(isinstance(a, int) for g in run2.gaps for a in g)
 
 
-def test_reanalysis_of_loaded_run_identical(run, tmp_path):
+def test_reanalysis_of_loaded_run_identical(run, LABELS, tmp_path):
     res = analyse_run(run, BELL, labels=LABELS)
+    assert sum("relabelled" in r.flags for s in res.sets for r in s.reps) == 2
     save_session(tmp_path / "s.npz", run, BELL, {"labels": LABELS, "summary": res.summary()})
     run2, bell2, meta2 = load_session(tmp_path / "s.npz")
     res2 = analyse_run(run2, bell2, labels=meta2["labels"])
@@ -122,7 +130,7 @@ def test_calibration_roundtrip_exact(run):
                                                    res.calib.warnings)
 
 
-def test_reanalyse_uses_labels_and_stored_calibration(run):
+def test_reanalyse_uses_labels_and_stored_calibration(run, LABELS):
     res = analyse_run(run, BELL, labels=LABELS)
     meta = {"labels": LABELS, "calibration": calibration_to_dict(res.calib, carried=False)}
     buf = io.BytesIO()
@@ -130,3 +138,30 @@ def test_reanalyse_uses_labels_and_stored_calibration(run):
     buf.seek(0)
     run2, bell2, meta2 = load_session(buf)
     assert reanalyse(run2, bell2, meta2).summary() == res.summary()
+
+
+def _old_file(run, meta: dict) -> io.BytesIO:
+    """A session file as written before labels were keyed by sample index."""
+    buf = io.BytesIO()
+    np.savez_compressed(buf, sample_index=run.sample_index, raw=run.raw,
+                        gaps=np.zeros((0, 2), dtype=np.int64), rate_hz=np.float64(run.rate_hz),
+                        ranges=np.array([16, 2000]), meta_json=np.array(json.dumps(meta)))
+    buf.seek(0)
+    return buf
+
+
+def test_old_rep_index_labels_migrated_with_summary(run, LABELS):
+    summary = analyse_run(run, BELL).summary()
+    old = {"labels": {str(k): v for k, v in REP_LABELS.items()}, "summary": summary}
+    _, _, meta = load_session(_old_file(run, old))
+    assert meta["labels"] == LABELS and meta["load_warnings"] == []
+    assert meta["labels_keyed_by"] == "low_sample_index"
+
+
+def test_old_rep_index_labels_dropped_without_summary(run, tmp_path):
+    _, _, meta = load_session(_old_file(run, {"labels": {"3": {"kind": "other"}}}))
+    assert meta["labels"] == {}
+    assert len(meta["load_warnings"]) == 1 and "dropped" in meta["load_warnings"][0]
+    save_session(tmp_path / "s.npz", run, BELL, meta)  # the warning is not stored
+    _, _, meta2 = load_session(tmp_path / "s.npz")
+    assert meta2["load_warnings"] == []

@@ -121,9 +121,15 @@ def test_saturated_sample_flagged_and_counted(sim, clean):
     assert res.metrics.by_kind["snatch"].n == 16
 
 
+def low(res: SessionResult, i: int) -> int:
+    """Sample index of rep i's low (label key); the simulated runs start at sample index 0."""
+    return reps_of(res)[i].i_low
+
+
 def test_labels_override_classifier(sim, clean):
-    res = analyse_run(sim[0], labels={3: {"kind": "other"}, 20: {"hand": "L"},
-                                      9: {"kind": "snatch", "hand": "R"}})
+    res = analyse_run(sim[0], labels={low(clean, 3): {"kind": "other"},
+                                      low(clean, 20) + 40: {"hand": "L"},  # 0.1 s off
+                                      low(clean, 9): {"kind": "snatch", "hand": "R"}})
     reps = reps_of(res)
     assert (reps[3].kind, reps[3].hand) == ("other", "-")
     assert "relabelled" in reps[3].flags
@@ -134,7 +140,7 @@ def test_labels_override_classifier(sim, clean):
     assert res.metrics.reps_by_kind_hand["other:-"] == 1
     assert res.metrics.reps_by_kind_hand["snatch:L"] == 8  # 7 left + rep 20
     with pytest.raises(ValueError, match="kind"):
-        analyse_run(sim[0], labels={0: {"kind": "clean"}})
+        analyse_run(sim[0], labels={low(clean, 0): {"kind": "clean"}})
 
 
 @pytest.mark.parametrize("label", [
@@ -142,10 +148,36 @@ def test_labels_override_classifier(sim, clean):
     {"hand": "R"},  # rep 9 is a swing
     {"kind": "snatch", "hand": "-"}, {"kind": "snatch", "hand": "X"},
 ])
-def test_labels_reject_hand_inconsistent_with_kind(sim, label):
+def test_labels_reject_hand_inconsistent_with_kind(sim, clean, label):
     """Hand L / R / ? only for a snatch; "-" only for swing / other."""
     with pytest.raises(ValueError, match="hand"):
-        analyse_run(sim[0], labels={9: label})
+        analyse_run(sim[0], labels={low(clean, 9): label})
+
+
+def test_label_far_from_any_low_ignored(sim, clean):
+    res = analyse_run(sim[0], labels={low(clean, 9) + 130: {"kind": "other"}})  # 0.32 s off
+    assert not any("relabelled" in r.flags for r in reps_of(res))
+
+
+@pytest.mark.parametrize("labelled_on", ["clean", "gapped"])
+def test_labels_follow_their_rep_when_the_rep_count_changes(sim, clean, labelled_on):
+    """Labels are keyed by the low's sample index: a re-analysis that finds one rep fewer
+    (rep 1 lost in a 1.5 s gap) or one more (the other way round) keeps each label on its rep,
+    although the rep's display index shifts by one."""
+    run, truth = sim
+    tr = truth.reps[1]
+    gapped_run = with_gap(run, tr.i_low - 100, 600)
+    gapped = analyse_run(gapped_run)
+    assert len(reps_of(gapped)) == len(reps_of(clean)) - 1
+    src, dst_run, dst_ref = ((clean, gapped_run, gapped) if labelled_on == "clean"
+                             else (gapped, run, clean))
+    target = next(r for r in reps_of(src) if r.i_low > truth.reps[12].i_low)  # a swing
+    res = analyse_run(dst_run, labels={target.i_low: {"kind": "other"}})
+    relabelled = [r for r in reps_of(res) if "relabelled" in r.flags]
+    assert len(relabelled) == 1 and abs(relabelled[0].i_low - target.i_low) <= 4
+    assert relabelled[0].kind == "other"
+    i_src = reps_of(src).index(target)
+    assert reps_of(res).index(relabelled[0]) == i_src + (-1 if labelled_on == "clean" else 1)
 
 
 # ----------------------------------------------------------------------------- summary
@@ -253,7 +285,8 @@ def test_cli_analyse_pkraw(sim, clean, tmp_path, capsys):
 
 def test_cli_analyse_npz_with_bell_and_labels(sim, tmp_path, capsys):
     run, _ = sim
-    save_session(tmp_path / "s.npz", run, BellProfile(), {"labels": {3: {"kind": "other"}}})
+    lows = [r.i_low for r in reps_of(analyse_run(run))]
+    save_session(tmp_path / "s.npz", run, BellProfile(), {"labels": {lows[3]: {"kind": "other"}}})
     (tmp_path / "bell.json").write_text(json.dumps({"mass_kg": 24.0}))
     assert main(["analyse", str(tmp_path / "s.npz"), "--bell", str(tmp_path / "bell.json")]) == 0
     out = capsys.readouterr().out
@@ -458,11 +491,10 @@ def test_unbridged_gap_tilt_corrected(gap_sim, gap_s, rep):
 
 
 def test_unbridged_gap_without_correction_flags_orientation(gap_sim, monkeypatch):
-    """When the tilt error cannot be estimated (here: forced by requiring more anchored
-    segment time than the set holds), every rep from the gap to the next static window is
+    """When the tilt error is not corrected (here: forced, no correction allowed), every rep from the gap to the next static window is
     flagged "orientation" and "low_conf" (classification kept as computed; still counted)."""
     import powerkettle.pipeline as pl
-    monkeypatch.setattr(pl, "GAP_TILT_MIN_S", 1e6)
+    monkeypatch.setattr(pl, "GAP_TILT_MAX_ITER", 0)
     run, truth = gap_sim
     tr = truth.reps[4]
     i0 = (tr.i_low + tr.i_top) // 2

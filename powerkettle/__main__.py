@@ -77,6 +77,8 @@ def _load(path: str) -> tuple[list[tuple[Run, list[dict]]], BellProfile, dict, s
     .pkraw or .npz file; markers as {"phone_ms", "text", "sample_index"} dicts."""
     if Path(path).suffix.lower() == ".npz":
         run, bell, meta = load_session(path)
+        for w in meta["load_warnings"]:
+            print(f"warning: {w}")
         return ([(run, list(meta["markers"]))], bell, meta["labels"], meta["app_version"],
                 meta["calibration"])
     rec = to_recording(read_rawlog(path))
