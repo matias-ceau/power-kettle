@@ -7,10 +7,11 @@ acceleration, plus pose angles θ, ψ, φ (degrees in ``Pose``, zero rate and ac
 keyframes). Between keyframes every coordinate follows a quintic. ``orientation`` builds
 the bell -> world rotation
 
-    R = R_z(heading) · R_z(ψ) · R_y(θ) · R_x(φ) · R_z(π)
+    R = R_z(heading) · R_y(θ) · R_z(ψ) · R_x(φ) · R_z(π)
 
-(θ > 0 leans the handle forward, ψ twists about world z, φ rolls about athlete x for
-``LieOnSide``; R_z(π) makes the front flat face the lifter in the upright floor pose).
+(twist ψ about the bell's own up axis first, then the sagittal tilt θ: θ is always the world
+sagittal tilt of bell-up and θ > 0 leans the handle forward; φ rolls about athlete x for
+``LieOnSide`` only; R_z(π) makes the front flat face the lifter in the upright floor pose).
 """
 from __future__ import annotations
 
@@ -246,8 +247,12 @@ def evaluate(times: np.ndarray, coeffs: np.ndarray, t: np.ndarray, cols: slice =
 
 
 def orientation(ang: np.ndarray, heading: float) -> np.ndarray:
-    """World <- bell quaternions from (θ, ψ, φ) columns."""
+    """World <- bell quaternions from (θ, ψ, φ) columns.
+
+    R = R_z(heading) · R_y(θ) · R_z(ψ) · R_x(φ) · R_z(π).
+    """
     ez, ey, ex = np.eye(3)[2], np.eye(3)[1], np.eye(3)[0]
-    q = quat.mul(quat.from_axis_angle(ez, ang[:, 1] + heading), quat.from_axis_angle(ey, ang[:, 0]))
+    q = quat.mul(quat.from_axis_angle(ez, heading), quat.from_axis_angle(ey, ang[:, 0]))
+    q = quat.mul(q, quat.from_axis_angle(ez, ang[:, 1]))
     q = quat.mul(q, quat.from_axis_angle(ex, ang[:, 2]))
     return quat.mul(q, quat.from_axis_angle(ez, math.pi))

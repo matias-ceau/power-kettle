@@ -13,13 +13,14 @@ Bell frame B: x outward normal of the front flat (faces the lifter at the hike),
 
 Orientation (bell -> world)::
 
-    R = R_z(heading) · R_z(ψ) · R_y(θ) · R_x(φ) · R_z(π)
+    R = R_z(heading) · R_y(θ) · R_z(ψ) · R_x(φ) · R_z(π)
 
-θ rotates bell-up about +y (θ > 0 leans the handle forward), ψ twists about world z, φ
-rolls about athlete x (non-zero only in ``LieOnSide``). The constant R_z(π) turns the front
-flat towards the lifter in the upright floor pose (bell x = −forward), so forward =
-−horizontal(R·out). Because ψ is applied after θ, ψ also turns the tilt direction: at a
-snatch lockout (θ = +20°, ψ = ±180°) the handle leans 20° backward.
+ψ twists the bell about its own up axis (base -> handle), then θ tilts bell-up about +y, so θ
+is the world sagittal tilt of bell-up whatever the twist (θ > 0 leans the handle forward;
+at a snatch lockout, θ = +20°, the bell hangs behind the forearm with the handle 20° forward).
+φ rolls about athlete x (non-zero only in ``LieOnSide``, where θ = ψ = 0). The constant R_z(π)
+turns the front flat towards the lifter in the upright floor pose (bell x = −forward), so
+forward = −horizontal(R·out).
 
 Sensor frame S: ``sensor_from_bell(mount_angle_deg)`` gives R_S←B; sensor z = bell x
 (outward normal of the box base) and, at mount angle 0, sensor x = bell y, sensor y = bell-up.
@@ -119,9 +120,9 @@ class Truth:
     alpha_w: np.ndarray  # (N,3) angular acceleration, world
     a_sensor_w: np.ndarray  # (N,3) acceleration of the sensor point, world
     quat_ws: np.ndarray  # (N,4) world <- sensor
-    theta: np.ndarray  # (N,) rad, pose parameters of R (not a sagittal projection)
-    psi: np.ndarray  # (N,) rad
-    phi: np.ndarray  # (N,) rad
+    theta: np.ndarray  # (N,) rad, world sagittal tilt of bell-up (+ = handle forward)
+    psi: np.ndarray  # (N,) rad, twist about bell-up (snatch: ±π at lockout)
+    phi: np.ndarray  # (N,) rad, roll about athlete x (LieOnSide only)
     tremor: np.ndarray  # (N,) bool, hand-held static (tremor applied)
     forward_w: np.ndarray  # (3,) athlete forward in the world frame
     R_sb: np.ndarray  # (3,3) sensor <- bell

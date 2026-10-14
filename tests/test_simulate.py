@@ -152,6 +152,26 @@ def test_pose_conventions():
     assert truth_flip.psi[truth_flip.reps[0].i_top] == pytest.approx(-math.pi)
 
 
+def test_theta_is_world_sagittal_tilt():
+    """R = R_heading · R_y(θ) · R_z(ψ) · R_x(φ) · R_z(π): twist about bell-up first, so θ is
+    the world sagittal tilt of bell-up at every sample whatever the twist (φ = 0 here)."""
+    _, truth = simulate([Rest(1), Snatch(2, "L"), Swing(1), Snatch(1, "R"), Rest(1)], cfg=quiet())
+    up_w = quat.rotate(truth.quat, [0.0, 0.0, 1.0])
+    fwd = truth.forward_w
+    lateral = np.cross([0.0, 0.0, 1.0], fwd)
+    sagittal = np.arctan2(up_w @ fwd, up_w[:, 2])
+    assert np.max(np.abs(sagittal - truth.theta)) < 1e-9
+    assert np.max(np.abs(up_w @ lateral)) < 1e-9  # no lateral lean, even mid-twist
+    fs = truth.fs_true
+    for r in (truth.reps[0], truth.reps[1], truth.reps[3]):
+        # lockout: handle leans forward by 20 deg (bell hangs behind the forearm)
+        assert up_w[r.i_top] @ fwd == pytest.approx(math.sin(math.radians(20)), abs=1e-6)
+        keys = {r.i_low: 40, r.i_low + round(0.40 * fs): -30, r.i_top: 20, r.i_top_end: 20,
+                r.i_top_end + round(0.35 * fs): -30, r.i_end: 40}
+        for i, theta_deg in keys.items():
+            assert math.degrees(sagittal[i]) == pytest.approx(theta_deg, abs=0.05)
+
+
 def test_gyro_integrates_to_truth_orientation():
     """Gyro = instantaneous body rates in the sensor frame (quat.integrate convention).
 
