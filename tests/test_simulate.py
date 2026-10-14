@@ -16,6 +16,7 @@ from powerkettle.simulate import (
     Snatch,
     Swing,
     TableLift,
+    crop,
     sensor_from_bell,
     simulate,
 )
@@ -235,3 +236,85 @@ def test_tremor_only_when_hand_held():
 def test_hold_must_follow_snatch():
     with pytest.raises(ValueError, match="Hold"):
         simulate([Rest(3), Swing(2), Hold(2)])
+
+
+def _rest_forward(truth, i0, i1):
+    """−horizontal(R·out) averaged over [i0, i1] (the pipeline's rest-based forward)."""
+    out = quat.rotate(truth.quat_ws[i0:i1 + 1], truth.out_s).mean(axis=0)
+    h = np.array([-out[0], -out[1], 0.0])
+    return h / np.linalg.norm(h)
+
+
+def test_rest_yaw_parks_bell_turned():
+    """Rest(yaw_deg) parks the bell turned about its own up axis: the rest-based forward is
+    the athlete forward turned by yaw; the first Rest (calibration) may be turned too."""
+    _, truth = simulate([Rest(3, yaw_deg=180.0), Swing(2), Rest(3, yaw_deg=70.0), Swing(2),
+                         Rest(2)], cfg=quiet())
+    rests = windows(truth, "rest")
+    assert len(rests) == 3
+    h = math.radians(quiet().heading_deg)
+    for (i0, i1), yaw in zip(rests, (180.0, 70.0, 0.0)):
+        assert np.degrees(truth.psi[i0:i1 + 1]) == pytest.approx(yaw, abs=1e-9)
+        a = h + math.radians(yaw)
+        assert np.allclose(_rest_forward(truth, i0, i1), [math.cos(a), math.sin(a), 0.0],
+                           atol=1e-9)
+        assert np.max(np.linalg.norm(truth.vel[i0:i1 + 1], axis=1)) < 1e-12
+    # the reps themselves are unchanged (the bell turns back on the way to the first low)
+    _, plain = simulate([Rest(3), Swing(2), Rest(3), Swing(2), Rest(2)], cfg=quiet())
+    assert [r.power_w for r in truth.reps] == pytest.approx([r.power_w for r in plain.reps])
+    assert np.allclose(truth.theta, plain.theta)
+
+
+def test_acc_scale():
+    run, _ = simulate([Rest(3)], cfg=quiet(acc_scale=1.05))
+    norm = np.linalg.norm(scale_run(run).acc, axis=1)
+    assert np.mean(norm) == pytest.approx(1.05 * G, rel=5e-4)
+
+
+def test_low_residual_speed():
+    """Speed left at every backswing low, along the arc (forward and slightly down)."""
+    _, truth = simulate([Rest(1), Swing(3), Snatch(2, "R"), Rest(1)],
+                        cfg=quiet(low_residual_speed=0.3))
+    fwd = truth.forward_w
+    for r in truth.reps:
+        for i in (r.i_low, r.i_end):
+            v = truth.vel[i]
+            assert np.linalg.norm(v) == pytest.approx(0.3, abs=0.03)  # ±½ sample of 15 m/s²
+            assert v @ fwd > 0.27 and v[2] < 0.0
+    _, plain = simulate([Rest(1), Swing(3), Rest(1)], cfg=quiet())
+    assert np.linalg.norm(plain.vel[plain.reps[0].i_low]) < 0.02  # sample rounding only
+
+
+@pytest.mark.parametrize("lockout_s", [0.12, 0.05])
+def test_short_lockout(lockout_s):
+    _, truth = simulate([Rest(1), Snatch(2, "R", lockout_s=lockout_s), Rest(1)], cfg=quiet())
+    for r in truth.reps:
+        assert (r.i_top_end - r.i_top) / truth.fs_true == pytest.approx(lockout_s, abs=0.005)
+        assert r.apex_m == pytest.approx(1.6, abs=0.01)
+
+
+def test_lockout_too_short_rejected():
+    with pytest.raises(ValueError, match="lockout_s"):
+        simulate([Rest(1), Snatch(1, "R", lockout_s=0.04), Rest(1)])
+
+
+def test_crop_starts_mid_session():
+    """crop(run, truth, start_s): the Run and Truth from start_s on, sample indices re-based to
+    0; reps whose low precedes the cut are dropped, a set the cut falls in starts at 0."""
+    moves = [Rest(3), Swing(8), Rest(3), Swing(4), Rest(3)]
+    run, truth = simulate(moves)
+    tr = truth.reps[3]
+    i0 = (tr.i_low + tr.i_top) // 2
+    start_s = i0 / truth.fs_true
+    run2, truth2 = crop(run, truth, start_s)
+    assert run2.sample_index[0] == 0 and len(run2.sample_index) == len(run.sample_index) - i0
+    assert np.array_equal(run2.raw, run.raw[i0:])
+    assert run2.rate_hz == run.rate_hz and run2.gaps == []
+    assert all(0 <= s.sample_index <= len(run2.sample_index) for s in run2.statuses)
+    assert np.all(run2.packet_times[:, 1] >= 0)
+    assert len(truth2.t) == len(run2.sample_index) and truth2.t[0] == 0.0
+    assert np.allclose(truth2.pos, truth.pos[i0:])
+    assert [r.i_low + i0 for r in truth2.reps] == [r.i_low for r in truth.reps[4:]]
+    assert truth2.sets[0] == (0, truth.sets[0][1] - i0)
+    assert [(a + i0, b + i0) for a, b in truth2.sets[1:]] == truth.sets[1:]
+    assert all(i >= 0 for i, _ in truth2.anchors)

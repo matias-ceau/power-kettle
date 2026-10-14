@@ -15,6 +15,7 @@ sagittal tilt of bell-up and θ > 0 leans the handle forward; φ rolls about ath
 """
 from __future__ import annotations
 
+import dataclasses
 import math
 from dataclasses import dataclass
 
@@ -26,8 +27,12 @@ from . import quat
 # ----------------------------------------------------------------------------- moves
 @dataclass(frozen=True)
 class Rest:
-    """Bell standing upright on the floor, untouched."""
+    """Bell standing upright on the floor, untouched; parked turned by `yaw_deg` about its own
+    up axis (ψ; 180 = front flat facing away from the lifter). The bell is turned while it is
+    set down (or, after another rest, in a 1 s turn on the floor; for the session's first Rest,
+    from the start) and turned back on the way to the next low."""
     seconds: float
+    yaw_deg: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -37,12 +42,15 @@ class Swing:
     cadence_s: float = 1.2
 
 
+MIN_LOCKOUT_S = 0.05
+
+
 @dataclass(frozen=True)
 class Snatch:
     n: int
     hand: str = "R"
     apex_m: float = 1.6
-    lockout_s: float = 0.4
+    lockout_s: float = 0.4  # at least MIN_LOCKOUT_S
 
 
 @dataclass(frozen=True)
@@ -88,7 +96,13 @@ class Pose:
 
 FLOOR = Pose((0.45, 0.0, 0.104))
 LOW = Pose((-0.30, 0.0, 0.40), acc=(15.0, 0.0, 5.0), theta=40.0)
+LOW_ARC = (0.96, 0.0, -0.28)  # unit tangent of the arc at the low, towards the next pull
 LIE = Pose((0.45, -0.024, 0.100), phi=90.0)  # on its side: COM at ~ball radius, offset sideways
+
+
+def _low(residual: float) -> Pose:
+    """The backswing low, with `residual` speed (m/s) left along the arc (LOW_ARC)."""
+    return dataclasses.replace(LOW, vel=tuple(residual * c for c in LOW_ARC))
 
 
 def _swing_top(apex: float, residual: float, theta: float) -> Pose:
@@ -117,7 +131,8 @@ class RepEvent:
 class Script:
     """Accumulates keyframes and event times (seconds) while expanding the moves."""
 
-    def __init__(self) -> None:
+    def __init__(self, low: Pose = LOW) -> None:
+        self.low = low
         self.t = 0.0
         self.times = [0.0]
         self.poses = [FLOOR]
@@ -140,15 +155,27 @@ class Script:
             self.rests.append((self.t, self.t + dur))
             self.stay(dur)
 
+    def park(self, yaw_deg: float) -> None:
+        """Make the current floor pose turned by `yaw_deg` (ψ) before a rest: the last keyframe
+        (the set-down, or the start) is turned, unless it ends a rest, then a 1 s turn follows."""
+        last = self.poses[-1]
+        if last.psi == yaw_deg:
+            return
+        turned = dataclasses.replace(last, psi=float(yaw_deg))
+        if self.rests and abs(self.rests[-1][1] - self.t) < 1e-12:
+            self.to(1.0, turned)
+        else:
+            self.poses[-1] = turned
+
     def swing_set(self, n: int, apex: float, cadence_s: float, residual: float,
                   top_theta: float, kind: str) -> None:
         start, k = self.t, cadence_s / 1.2
-        self.to(0.8, LOW)
+        self.to(0.8, self.low)
         for _ in range(n):
             t_low = self.t
             self.to(0.55 * k, _swing_top(apex, residual, top_theta))
             t_top = self.t
-            self.to(0.65 * k, LOW)
+            self.to(0.65 * k, self.low)
             self.reps.append(RepEvent(t_low, t_top, t_top, self.t, kind, "-"))
         self.to(1.0, FLOOR)
         self.sets.append((start, self.t))
@@ -156,10 +183,12 @@ class Script:
     def snatch_set(self, mv: Snatch, hold_s: float, twist_sign: int) -> None:
         if mv.hand not in ("L", "R"):
             raise ValueError(f"Snatch hand must be 'L' or 'R', got {mv.hand!r}")
+        if not mv.lockout_s >= MIN_LOCKOUT_S:
+            raise ValueError(f"Snatch lockout_s must be >= {MIN_LOCKOUT_S} s, got {mv.lockout_s}")
         sgn = (1 if mv.hand == "R" else -1) * twist_sign
         up, lock, drop = _snatch_poses(mv.apex_m, sgn)
         start = self.t
-        self.to(0.8, LOW)
+        self.to(0.8, self.low)
         for i in range(mv.n):
             t_low = self.t
             self.to(0.40, up)
@@ -169,20 +198,21 @@ class Script:
             self.tremor.append((t_top, self.t))
             t_top_end = self.t
             self.to(0.35, drop)
-            self.to(0.45, LOW)
+            self.to(0.45, self.low)
             self.reps.append(RepEvent(t_low, t_top, t_top_end, self.t, "snatch", mv.hand))
         self.to(1.0, FLOOR)
         self.sets.append((start, self.t))
 
 
 def expand(moves: list, float_residual_speed: float = 0.0,
-           right_hand_twist_sign: int = +1) -> Script:
+           right_hand_twist_sign: int = +1, low_residual_speed: float = 0.0) -> Script:
     """Expand moves into keyframes and event times, starting upright on the floor."""
-    sc = Script()
+    sc = Script(_low(low_residual_speed))
     i = 0
     while i < len(moves):
         mv = moves[i]
         if isinstance(mv, Rest):
+            sc.park(mv.yaw_deg)
             sc.rest(mv.seconds)
         elif isinstance(mv, Swing):
             sc.swing_set(mv.n, mv.apex_m, mv.cadence_s, float_residual_speed, -90.0, "swing")

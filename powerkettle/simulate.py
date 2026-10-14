@@ -32,6 +32,7 @@ consecutive ω, then the grid is decimated to the sensor samples.
 """
 from __future__ import annotations
 
+import dataclasses
 import math
 from dataclasses import dataclass
 
@@ -58,7 +59,7 @@ from .sim_motion import (
 )
 
 __all__ = ["Hold", "LieOnSide", "PartialRep", "Rest", "SimConfig", "Snatch", "Swing",
-           "TableLift", "Truth", "TruthRep", "sensor_from_bell", "simulate"]
+           "TableLift", "Truth", "TruthRep", "crop", "sensor_from_bell", "simulate"]
 
 ACC_RANGE_G = 16
 GYRO_RANGE_DPS = 2000
@@ -85,6 +86,8 @@ class SimConfig:
     tremor_amp: float = 0.1  # m/s², hand-held static phases only
     tremor_hz: float = 8.0
     float_residual_speed: float = 0.0  # m/s, COM speed left at a swing top
+    low_residual_speed: float = 0.0  # m/s, COM speed left at every backswing low (along the arc)
+    acc_scale: float = 1.0  # accelerometer scale error: reads acc_scale × specific force (+ bias)
     right_hand_twist_sign: int = +1  # sign of ψ for the right hand's snatch twist
     seed: int = 0
 
@@ -198,7 +201,8 @@ def _statuses(n: int, fs_true: float, fs_nominal: float) -> list[Status]:
 def simulate(moves: list, bell: BellProfile = BellProfile(),
              cfg: SimConfig = SimConfig()) -> tuple[Run, Truth]:
     """Render `moves` (starting from the bell upright on the floor) to a Run and its Truth."""
-    sc = expand(moves, cfg.float_residual_speed, cfg.right_hand_twist_sign)
+    sc = expand(moves, cfg.float_residual_speed, cfg.right_hand_twist_sign,
+                cfg.low_residual_speed)
     if sc.t <= 0:
         raise ValueError("moves must have a positive total duration")
     times = np.array(sc.times)
@@ -237,8 +241,9 @@ def simulate(moves: list, bell: BellProfile = BellProfile(),
 
     rng = np.random.default_rng(cfg.seed)
     tremor_env = _window_mask(t, sc.tremor, TREMOR_RAMP_S)
-    f_s = (f_s + np.asarray(cfg.acc_bias, float) + cfg.acc_noise * rng.standard_normal((n, 3))
-           + (cfg.tremor_amp * tremor_env * np.sin(2 * np.pi * cfg.tremor_hz * t))[:, None])
+    f_s = (cfg.acc_scale
+           * (f_s + (cfg.tremor_amp * tremor_env * np.sin(2 * np.pi * cfg.tremor_hz * t))[:, None])
+           + np.asarray(cfg.acc_bias, float) + cfg.acc_noise * rng.standard_normal((n, 3)))
     w_s = w_s + np.asarray(cfg.gyro_bias, float) + cfg.gyro_noise * rng.standard_normal((n, 3))
     raw = np.concatenate([_to_counts(f_s, ACC_RANGE_G * G),
                           _to_counts(np.degrees(w_s), float(GYRO_RANGE_DPS))], axis=1)
@@ -266,6 +271,39 @@ def simulate(moves: list, bell: BellProfile = BellProfile(),
     )
     _fill_events(truth, sc, n)
     return run, truth
+
+
+def crop(run: Run, truth: Truth, start_s: float) -> tuple[Run, Truth]:
+    """`run` and `truth` from `start_s` (true time) on, as a recording that starts there (a
+    reconnect mid-session): sample indices and times re-based to 0. Statuses and packet times
+    before the cut are dropped (the rate is re-estimated from the rest); truth reps whose low
+    precedes the cut and point anchors before it are dropped, a set or window the cut falls
+    in starts at 0."""
+    i0 = int(round(start_s * truth.fs_true))
+    n = len(truth.t) - i0
+    if not 0 <= i0 < len(truth.t):
+        raise ValueError(f"start_s {start_s} outside the recording")
+    statuses = [dataclasses.replace(s, sample_index=s.sample_index - i0)
+                for s in run.statuses if s.sample_index > i0]
+    span = (statuses[-1].time_us - statuses[0].time_us) / 1e6 if statuses else 0.0
+    rate_estimated = len(statuses) >= 2 and span >= MIN_RATE_SPAN_S
+    pt = run.packet_times[run.packet_times[:, 1] >= i0] - [0.0, i0]
+    run2 = dataclasses.replace(
+        run, sample_index=run.sample_index[i0:] - i0, raw=run.raw[i0:], gaps=[],
+        statuses=statuses, rate_hz=estimate_rate(statuses, run.rate_hz) if rate_estimated
+        else run.rate_hz, rate_estimated=rate_estimated, packet_times=pt)
+    per_sample = {f.name: getattr(truth, f.name)[i0:] for f in dataclasses.fields(Truth)
+                  if isinstance(getattr(truth, f.name), np.ndarray)
+                  and getattr(truth, f.name).shape[:1] == (len(truth.t),)}
+    per_sample["t"] = np.arange(n) / truth.fs_true
+    reps = [dataclasses.replace(r, i_low=r.i_low - i0, i_top=r.i_top - i0, i_end=r.i_end - i0,
+                                i_top_end=r.i_top_end - i0) for r in truth.reps if r.i_low >= i0]
+    wins = [(max(0, a - i0), b - i0, k) for a, b, k in truth.anchor_windows if b >= i0]
+    truth2 = dataclasses.replace(
+        truth, **per_sample, reps=reps, anchor_windows=wins,
+        anchors=[(a, k) for a, _, k in wins],
+        sets=[(max(0, a - i0), b - i0) for a, b in truth.sets if b >= i0])
+    return run2, truth2
 
 
 def _fill_events(truth: Truth, sc: Script, n: int) -> None:
