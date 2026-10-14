@@ -5,6 +5,7 @@
 
 #include "proto.h"
 #include "ring_buffer.h"
+#include "segments.h"
 
 using namespace pk;
 
@@ -152,6 +153,77 @@ void test_ring_buffer_wraparound_and_clear() {
   TEST_ASSERT_EQUAL_INT16(2, out[0].v[0]);
 }
 
+void test_ring_buffer_peek_then_drop() {
+  RingBuffer<4> rb;
+  for (int i = 0; i < 4; ++i) rb.push(make_sample(static_cast<int16_t>(i * 10)));
+  Sample out[8];
+  rb.pop(out, 2);  // head now at index 2, so peeks below wrap around
+  rb.push(make_sample(40));
+  rb.push(make_sample(50));
+
+  // peek copies without consuming
+  TEST_ASSERT_EQUAL_UINT32(3, rb.peek(out, 3));
+  TEST_ASSERT_EQUAL_INT16(20, out[0].v[0]);
+  TEST_ASSERT_EQUAL_INT16(30, out[1].v[0]);
+  TEST_ASSERT_EQUAL_INT16(40, out[2].v[0]);
+  TEST_ASSERT_EQUAL_UINT32(4, rb.size());
+  TEST_ASSERT_EQUAL_UINT32(4, rb.peek(out, 8));
+  TEST_ASSERT_EQUAL_INT16(50, out[3].v[0]);
+
+  // drop discards from the front; clamps to size
+  TEST_ASSERT_EQUAL_UINT32(3, rb.drop(3));
+  TEST_ASSERT_EQUAL_UINT32(1, rb.size());
+  TEST_ASSERT_EQUAL_UINT32(1, rb.peek(out, 8));
+  TEST_ASSERT_EQUAL_INT16(50, out[0].v[0]);
+  TEST_ASSERT_EQUAL_UINT32(1, rb.drop(5));
+  TEST_ASSERT_EQUAL_UINT32(0, rb.size());
+  TEST_ASSERT_EQUAL_UINT32(0, rb.peek(out, 8));
+}
+
+void test_segments_contiguous_and_gaps() {
+  Segments<3> sg;
+  TEST_ASSERT_TRUE(sg.empty());
+  TEST_ASSERT_EQUAL_UINT32(0, sg.front_count());
+  for (uint32_t i = 10; i < 15; ++i) {
+    TEST_ASSERT_TRUE(sg.can_append(i));
+    sg.append(i);
+  }
+  TEST_ASSERT_EQUAL_UINT32(10, sg.front_first());
+  TEST_ASSERT_EQUAL_UINT32(5, sg.front_count());
+
+  // 15..16 dropped; 17 starts a second segment, 30 a third
+  sg.append(17);
+  sg.append(18);
+  sg.append(30);
+  TEST_ASSERT_TRUE(sg.can_append(31));    // extends the back segment
+  TEST_ASSERT_FALSE(sg.can_append(40));   // would need a 4th segment
+  sg.append(31);
+
+  sg.consume(3);
+  TEST_ASSERT_EQUAL_UINT32(13, sg.front_first());
+  TEST_ASSERT_EQUAL_UINT32(2, sg.front_count());
+  sg.consume(2);  // first segment exhausted
+  TEST_ASSERT_EQUAL_UINT32(17, sg.front_first());
+  TEST_ASSERT_EQUAL_UINT32(2, sg.front_count());
+  TEST_ASSERT_TRUE(sg.can_append(40));    // a slot is free again
+  sg.append(40);
+  sg.consume(2);
+  TEST_ASSERT_EQUAL_UINT32(30, sg.front_first());
+  TEST_ASSERT_EQUAL_UINT32(2, sg.front_count());
+  sg.consume(2);
+  TEST_ASSERT_EQUAL_UINT32(40, sg.front_first());
+  TEST_ASSERT_EQUAL_UINT32(1, sg.front_count());
+  sg.consume(1);
+  TEST_ASSERT_TRUE(sg.empty());
+
+  sg.append(5);
+  sg.clear();
+  TEST_ASSERT_TRUE(sg.empty());
+  sg.append(0);  // after clear, index 0 starts fresh
+  TEST_ASSERT_EQUAL_UINT32(0, sg.front_first());
+  TEST_ASSERT_EQUAL_UINT32(1, sg.front_count());
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_encode_imu_golden);
@@ -164,5 +236,7 @@ int main(int, char**) {
   RUN_TEST(test_max_samples_for_mtu);
   RUN_TEST(test_ring_buffer_fifo_and_full);
   RUN_TEST(test_ring_buffer_wraparound_and_clear);
+  RUN_TEST(test_ring_buffer_peek_then_drop);
+  RUN_TEST(test_segments_contiguous_and_gaps);
   return UNITY_END();
 }

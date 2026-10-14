@@ -28,6 +28,22 @@ class RingBuffer {
     return n;
   }
 
+  // Copies up to `max` samples from the front without consuming them.
+  // Pair with drop() to remove them only once they have been delivered.
+  size_t peek(Sample* out, size_t max) const {
+    size_t n = count_ < max ? count_ : max;
+    for (size_t i = 0; i < n; ++i) out[i] = buf_[(head_ + i) % N];
+    return n;
+  }
+
+  // Discards up to `n` samples from the front; returns number discarded.
+  size_t drop(size_t n) {
+    if (n > count_) n = count_;
+    head_ = (head_ + n) % N;
+    count_ -= n;
+    return n;
+  }
+
   size_t size() const { return count_; }
 
   void clear() {
