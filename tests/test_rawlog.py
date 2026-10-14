@@ -111,7 +111,7 @@ def test_default_ranges_without_status():
     assert run.rate_hz == 400.0 and run.statuses == []
 
 
-def stream_records(seconds, rate=402, t0_ms=0.0):
+def stream_records(seconds, rate=402, t0_ms=0.0, ahead=0):
     """One second of packets (19 samples each, 402/s -> last packet short) followed by a status."""
     recs, idx = [], 0
     for sec in range(seconds):
@@ -120,7 +120,7 @@ def stream_records(seconds, rate=402, t0_ms=0.0):
             n = min(19, target - idx)
             recs.append(RawRecord(1, t0_ms + sec * 1000.0, pkt(idx // 19, idx, n)))
             idx += n
-        recs.append(RawRecord(2, t0_ms + sec * 1000.0 + 500, status_bytes(sample_index=idx, time_us=(sec + 1) * 1_000_000)))
+        recs.append(RawRecord(2, t0_ms + sec * 1000.0 + 500, status_bytes(sample_index=idx + ahead, time_us=(sec + 1) * 1_000_000)))
     return recs, idx
 
 
@@ -129,6 +129,20 @@ def test_run_rate_estimated_from_its_statuses():
     run = to_recording(RawLog({}, recs)).runs[0]
     assert run.rate_hz == pytest.approx(402.0, rel=1e-6)
     assert len(run.statuses) == 10
+
+
+def test_status_ahead_of_received_packets_still_gives_rate():
+    # real statuses are latched at the FIFO read, so sample_index leads the last packet received
+    recs, _ = stream_records(10, ahead=25)
+    run = to_recording(RawLog({}, recs)).runs[0]
+    assert run.rate_hz == pytest.approx(402.0, rel=1e-6)
+    assert len(run.statuses) == 10
+
+
+def test_status_far_beyond_run_extent_rejected():
+    recs, last = stream_records(10)
+    recs.append(RawRecord(2, 30000.0, status_bytes(sample_index=last + 5000, time_us=11_000_000)))
+    assert len(to_recording(RawLog({}, recs)).runs[0].statuses) == 10
 
 
 def test_idle_trailing_statuses_do_not_affect_rate():

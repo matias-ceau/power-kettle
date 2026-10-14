@@ -24,6 +24,9 @@ DEFAULT_ACC_RANGE_G = 16
 DEFAULT_GYRO_RANGE_DPS = 2000
 DEFAULT_ODR_HZ = 400
 MIN_RATE_SPAN_S = 5.0
+# Status sample_index is the sensor's next sample, ahead of what the phone has received by up to
+# the firmware ring buffer (4 s at 400 Hz).
+RING_TOLERANCE_SAMPLES = 1600
 
 
 @dataclass
@@ -133,20 +136,21 @@ class _RunBuilder:
         self.packets.append(p)
         self.next_index = p.first_index + n
 
-    def accepts(self, st: Status) -> bool:
-        """Whether a status plausibly belongs to this run.
+    def is_candidate(self, st: Status) -> bool:
+        """Arrival-time screen for a status seen during this run.
 
-        Status notifies at 1 Hz even when idle, and after a device reset it may arrive
-        before the new run's first packet. Require the streaming flag, a sample_index inside
-        the run's received range (inclusive of the next expected index) and monotonicity.
+        Status notifies at 1 Hz even when idle, and after a device reset it may arrive before
+        the new run's first packet. Require the streaming flag and a sample_index that does not
+        go backwards since the previous candidate. The range check happens in build(), against
+        the run's final extent, because sample_index normally runs ahead of received packets.
         """
         if not st.flags & 1:
-            return False
-        if not self.packets[0].first_index <= st.sample_index <= self.next_index:
             return False
         return not self.statuses or st.sample_index >= self.statuses[-1].sample_index
 
     def build(self) -> Run:
+        lo, hi = self.packets[0].first_index, self.next_index + RING_TOLERANCE_SAMPLES
+        self.statuses = [st for st in self.statuses if lo <= st.sample_index <= hi]
         raw = np.concatenate([p.samples for p in self.packets]).astype(np.int16)
         sample_index = np.concatenate([
             p.first_index + np.arange(p.samples.shape[0], dtype=np.int64) for p in self.packets
@@ -162,7 +166,7 @@ def to_recording(log: RawLog) -> Recording:
     Gaps are detected from first_index continuity, so the u16 `seq` (which wraps) is not needed.
     A run's ranges come from the latest status seen before its first packet. Statuses seen
     after its first packet are attached to it only if they plausibly belong to it (see
-    _RunBuilder.accepts), so idle or post-reset statuses do not corrupt rate_hz.
+    _RunBuilder.is_candidate), so idle or post-reset statuses do not corrupt rate_hz.
     """
     builders: list[_RunBuilder] = []
     markers: list[tuple[float, str]] = []
@@ -185,7 +189,7 @@ def to_recording(log: RawLog) -> Recording:
             prev_first = p.first_index
         elif rec.type == REC_STATUS:
             latest = decode_status(rec.payload)
-            if current is not None and current.accepts(latest):
+            if current is not None and current.is_candidate(latest):
                 current.statuses.append(latest)
         elif rec.type == REC_MARKER:
             markers.append((rec.phone_ms, rec.payload.decode("utf-8")))
