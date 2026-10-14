@@ -1,0 +1,1 @@
+{"name":"PowerKettle","version":"dev","builds":[{"chipFamily":"ESP32-C3","parts":[{"path":"merged.bin","offset":0}]}]}

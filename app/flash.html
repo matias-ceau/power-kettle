@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Flash Power Kettle</title>
+<link rel="stylesheet" href="css/base.css">
+<script type="module" src="https://unpkg.com/esp-web-tools@10.4.0/dist/web/install-button.js?module"></script>
+<style>
+  esp-web-install-button button { width: 100%; }
+  ol { margin: 0 0 12px; padding-left: 1.25rem; }
+  li { margin-bottom: 4px; }
+  .back { display: inline-flex; align-items: center; min-height: var(--tap); }
+</style>
+</head>
+<body>
+<main>
+  <a class="back" href="index.html">&larr; Back</a>
+  <h1>Flash firmware</h1>
+  <p>Install the Power Kettle firmware on an ESP32-C3 straight from the browser.</p>
+
+  <section class="card">
+    <h2>Steps</h2>
+    <ol>
+      <li>Use desktop Chrome (or Edge).</li>
+      <li>Plug the ESP32-C3 into the computer with a USB-C cable.</li>
+      <li>Click Install and choose the C3's serial port.</li>
+    </ol>
+    <esp-web-install-button manifest="firmware/manifest.json">
+      <button slot="activate" class="primary">Install</button>
+      <span slot="unsupported">This browser cannot flash over USB. Use desktop Chrome or Edge.</span>
+      <span slot="not-allowed">Flashing needs a secure (https) page.</span>
+    </esp-web-install-button>
+  </section>
+
+  <p class="banner">Android Chrome may not support flashing. Use a desktop computer.</p>
+  <p>If the port does not show up, hold BOOT while plugging the board in, then try again.</p>
+</main>
+</body>
+</html>
