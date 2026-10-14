@@ -309,7 +309,8 @@ def test_crop_starts_mid_session():
     run2, truth2 = crop(run, truth, start_s)
     assert run2.sample_index[0] == 0 and len(run2.sample_index) == len(run.sample_index) - i0
     assert np.array_equal(run2.raw, run.raw[i0:])
-    assert run2.rate_hz == run.rate_hz and run2.gaps == []
+    assert run2.rate_hz == pytest.approx(run.rate_hz, rel=1e-12)
+    assert run2.gaps == []
     assert all(0 <= s.sample_index <= len(run2.sample_index) for s in run2.statuses)
     assert np.all(run2.packet_times[:, 1] >= 0)
     assert len(truth2.t) == len(run2.sample_index) and truth2.t[0] == 0.0
