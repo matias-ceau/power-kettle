@@ -290,9 +290,11 @@ instead (from a computer or an A-type charger).
 1. Multimeter in continuity mode: check there are no solder bridges between
    neighbouring pads (SDA to SCL should not beep; 3V3 to GND should not
    beep). With the switch OFF, **OUT+ to OUT−** should not beep.
-2. Resistance mode, switch OFF: **OUT+ to OUT−** reads roughly 200 kΩ (the two
-   divider resistors in series; it may take a moment to settle). A reading
-   below about 100 kΩ, or near 0, means a short; find it before going on.
+2. Resistance mode, switch OFF: **OUT+ to OUT−** reads roughly 200 kΩ or
+   less (the two divider resistors in series, plus parallel paths through the
+   TP4056/DW01 and the C3's GPIO4 protection diode; it may take a moment to
+   settle). Under about 1 kΩ means a short; find it before going on. Tens of
+   kΩ or more is fine.
 3. Switch ON: the 5V pad to GND should not read as a short either.
 
 ### Step 6: flash and test without the battery
@@ -325,7 +327,8 @@ Remember the rule: **switch OFF before plugging a cable into the C3**.
 4. **Battery is on now.** With the switch OFF, measure between **OUT+** and
    **OUT−**: you should read the battery voltage (3.3 to 4.2 V). If the
    battery reads 3.3 V or less, charge it first (next step) before any other
-   test.
+   test. 0 V here is normal on some protected boards until a charger has been
+   connected once; plug the TP4056 into a charger briefly.
 5. **Charge test (switch OFF).** Plug a charger into the **TP4056's** USB-C
    port. One LED should show charging (usually red), turning off or changing
    to a different colour (usually green or blue) when full. At about 255 mA a
@@ -406,27 +409,37 @@ fast-blinks even while connected.
    - **Rate (Hz)** settles at about **400** (anything within about 396 to 404
      is fine; the chip clock is up to about 1 % off by design and the analysis
      corrects for it).
-   - **Gaps** stays at 0 and **Dropped** stays at 0.
+   - **Gaps** stays at 0, **Runs** stays at 1, and **Dropped** stays at 0.
+     (A Runs count above 1 means the Bluetooth link dropped and the page
+     reconnected; data around each drop is lost.)
+   - No "Bluetooth MTU too small" or "Device is not streaming" banner.
 4. Tap **Stop & save** and check the file with
    `python -m powerkettle info FILE.pkraw` (see
    [recording-protocol.md](recording-protocol.md) for how to get it onto a
    computer). You want 1 run, about 400 Hz, 0 gaps.
+5. **Bluetooth packet size (serial log).** Open the serial monitor (see the
+   end of this section; the C3 is already on USB) and connect the record page
+   again. The log must show `[ble] mtu 247 -> 19 samples/packet` shortly after
+   `[ble] connected`. A smaller MTU (for example `mtu 23 -> 1 samples/packet`)
+   means the phone did not accept a larger packet size: the recording still
+   works but sends far more, smaller packets; try another phone or update
+   Chrome.
 
 **Part B: battery attached, C3 on USB (switch OFF).** After section 5, step 7.
 
-5. **Battery mV is plausible**: with a charged LiPo, 3700 to 4200 mV, and
+6. **Battery mV is plausible**: with a charged LiPo, 3700 to 4200 mV, and
    within about 50 to 100 mV of your multimeter reading at OUT+. The low
    battery banner disappears.
-6. **LED**: slow blink while advertising, solid once connected (provided the
+7. **LED**: slow blink while advertising, solid once connected (provided the
    battery is 3500 mV or more).
 
 **Part C: battery only (USB unplugged).**
 
-7. **Slide switch.** With no cable in the C3, switch ON: within a couple of
+8. **Slide switch.** With no cable in the C3, switch ON: within a couple of
    seconds the LED blinks slowly (or fast, if the battery is below 3500 mV:
    charge it). Connect with the record page: LED solid, battery reading
    about as in part B. Switch OFF: the LED goes out.
-8. **Charging.** Switch OFF, plug a charger into the **TP4056's** USB-C port:
+9. **Charging.** Switch OFF, plug a charger into the **TP4056's** USB-C port:
    the charging LED lights up.
 
 If the sensor is not found, the serial log shows the problem. Open the serial
@@ -462,7 +475,7 @@ catches loose wires, a bad Bluetooth setup or a flaky battery.
 | Line in the output | Expected |
 |---|---|
 | `runs:` | **1** |
-| `rate` on the run line | **400 ± 4 Hz** (396 to 404) |
+| `rate` on the run line | **400 ± 4 Hz** (396 to 404), and the line must **not** say `nominal` (that means the rate was not measured from the sensor's status data) |
 | `gaps:` | **0** (and 0 samples dropped) |
 | `duration:` | about 1800 s (30 min) |
 | `samples:` | about 720,000 |

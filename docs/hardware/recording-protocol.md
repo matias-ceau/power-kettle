@@ -159,7 +159,9 @@ the page's memory until it is saved. Do not close the tab until it says
 
 **What a good clip looks like**
 
-- `runs: 1` (a second run means you tapped Start or Stop twice).
+- `runs: 1`. A second run means Bluetooth dropped and the page reconnected
+  automatically: every reconnect re-sends start, which begins a new run, and
+  the data between the drop and the reconnect is lost.
 - Rate close to 400 Hz (about 396 to 404).
 - `gaps: 0 (0 samples dropped)`. A few gaps are acceptable but note them; they
   usually mean the phone was too far or Chrome went to the background.
