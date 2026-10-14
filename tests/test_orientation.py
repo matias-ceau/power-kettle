@@ -44,15 +44,41 @@ def test_tilt_error_under_2_degrees(session):
     assert err.max() < 2.0, f"max tilt error {err.max():.2f} deg"
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "brief tolerance 3 deg not met: measured 3.87 deg (swing set has no static samples, so "
-    "bias drift is uncorrected for ~14 s); see task-5 report"))
 def test_tilt_error_with_gyro_bias_error(session):
     imu, truth, cal = session
     bad = dataclasses.replace(cal, gyro_bias=cal.gyro_bias + 0.005)
     q = estimate_orientation(imu, bad)
     err = np.degrees(tilt_error(q, truth.quat_ws))
     assert err.max() < 3.0, f"max tilt error {err.max():.2f} deg"
+
+
+def test_bias_reestimated_after_long_rest(session):
+    imu, truth, cal = session
+    bad = dataclasses.replace(cal, gyro_bias=cal.gyro_bias + 0.005)
+    q, bias = estimate_orientation(imu, bad, return_bias=True)
+    assert bias.shape == (len(imu.t), 3)
+    fs = imu.fs
+    # the first still window already re-estimates; after the Rest(10) it is within 0.002 of truth
+    after_rest = bias[int(36 * fs)]  # Rest(10) ends ~24.3 s; the swing set starts ~34.3 s
+    assert np.all(np.abs(after_rest - truth.gyro_bias_s) < 0.002)
+    assert np.all(np.abs(bias[-1] - truth.gyro_bias_s) < 0.002)
+    # no long static window -> the calibration bias is kept
+    q2, bias2 = estimate_orientation(imu, bad, bias_update_min_s=1e6, return_bias=True)
+    assert np.allclose(bias2, bad.gyro_bias)
+    assert np.allclose(q2, estimate_orientation(imu, bad, bias_update_min_s=1e6))
+
+
+def test_bias_update_ignores_invalid_samples():
+    n = 1600
+    imu = synthetic(n, gyro=(0.02, 0.0, 0.0))
+    imu.gyro[100:200] = np.nan
+    imu.valid[100:200] = False  # splits the run: [0,100) too short, [200,1600) is 3.5 s
+    imu.gyro[1400:1420] = np.nan  # non-finite gyro also ends a static run
+    cal = types_cal(np.zeros(3), np.array([1.0, 0.0, 0.0, 0.0]))
+    q, bias = estimate_orientation(imu, cal, return_bias=True)
+    assert np.allclose(bias[300], (0.02, 0.0, 0.0))
+    assert np.allclose(bias[0], 0.0)  # window before the gap lasts < 1 s: no update
+    assert np.isfinite(q).all()
 
 
 def test_static_mask_rest_vs_motion(session):

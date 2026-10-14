@@ -95,8 +95,34 @@ def _static_stretch(q_prev, dq, f_hat, rate):
     return np.array(out)
 
 
-def estimate_orientation(imu: ImuData, calib: Calibration, gain: float = 2.0) -> np.ndarray:
-    """(N, 4) world <- sensor orientation, scalar-first.
+def working_bias(imu: ImuData, bias0: np.ndarray, static: np.ndarray, start: int = 0,
+                 min_seconds: float = 1.0) -> np.ndarray:
+    """(N, 3) gyro bias used for integration: `bias0`, replaced from the start of every static
+    run lasting >= `min_seconds` by the mean raw gyro over that run (valid samples only).
+    Runs ending at or before sample `start` are ignored."""
+    n = len(imu.t)
+    bias = np.tile(np.asarray(bias0, float), (n, 1))
+    need = max(1, int(math.ceil(min_seconds * imu.fs - 1e-9)))
+    good = imu.valid & np.all(np.isfinite(imu.gyro), axis=1)
+    runs = [(a, b) for a, b in zip(*_runs(static)) if b - a >= need and b > start]
+    for i, (a, b) in enumerate(runs):
+        sel = good[a:b]
+        if not sel.any():
+            continue
+        end = runs[i + 1][0] if i + 1 < len(runs) else n
+        bias[a:end] = imu.gyro[a:b][sel].mean(axis=0)
+    return bias
+
+
+def estimate_orientation(imu: ImuData, calib: Calibration, gain: float = 2.0,
+                         bias_update_min_s: float = 1.0, return_bias: bool = False):
+    """(N, 4) world <- sensor orientation, scalar-first; with `return_bias` also the (N, 3)
+    working gyro bias that was subtracted at each sample.
+
+    The gyro bias starts at `calib.gyro_bias` and is re-estimated online: whenever a static
+    window lasts at least `bias_update_min_s` seconds, the mean raw gyro over that window
+    replaces it from the window's start (the true rate of a still bell is zero), so drift of
+    the bias between sets is absorbed.
 
     Starts from `calib.q0` at the start of the calibration window (earlier samples hold it) and
     integrates the bias-corrected gyro. Where `static_mask` is set, the tilt is corrected towards
@@ -109,13 +135,15 @@ def estimate_orientation(imu: ImuData, calib: Calibration, gain: float = 2.0) ->
     q = np.empty((n, 4))
     q[: s0 + 1] = quat.normalize(calib.q0)
     if n == 1 or s0 == n - 1:
-        return q
+        return (q, np.tile(np.asarray(calib.gyro_bias, float), (n, 1))) if return_bias else q
 
-    omega = imu.gyro - calib.gyro_bias
+    static_all = static_mask(imu)
+    bias = working_bias(imu, calib.gyro_bias, static_all, s0, bias_update_min_s)
+    omega = imu.gyro - bias
     ok = imu.valid & np.all(np.isfinite(omega), axis=1)
     ok_s = ok[s0:]
     dq = _delta_quaternions(omega[s0:], ok_s[:-1] & ok_s[1:], dt)  # dq[j]: sample s0+j -> s0+j+1
-    static = static_mask(imu)[s0 + 1:]  # applies to the sample each step lands on
+    static = static_all[s0 + 1:]  # applies to the sample each step lands on
     with np.errstate(invalid="ignore", divide="ignore"):
         f_hat = imu.acc[s0 + 1:] / np.linalg.norm(imu.acc[s0 + 1:], axis=1, keepdims=True)
     rate = min(gain * dt, 1.0)
@@ -130,4 +158,4 @@ def estimate_orientation(imu: ImuData, calib: Calibration, gain: float = 2.0) ->
         else:
             q[s0 + a + 1: s0 + b + 1] = quat.normalize(
                 quat.mul(prev, _cumulative_product(dq[a:b])))
-    return q
+    return (q, bias) if return_bias else q
