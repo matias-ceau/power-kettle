@@ -36,6 +36,7 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
+from . import quat
 from .anchors import (
     Anchor,
     AnchorConfig,
@@ -45,7 +46,6 @@ from .anchors import (
     refine_rests,
     set_forwards,
 )
-from . import quat
 from .bell import BellProfile
 from .calibration import (
     Calibration,
