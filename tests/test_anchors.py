@@ -13,7 +13,7 @@ from powerkettle.anchors import (
 from powerkettle.bell import BellProfile
 from powerkettle.calibration import Calibration, calibrate
 from powerkettle.imu import G, ImuData, scale_run
-from powerkettle.kinematics import com_acceleration
+from powerkettle.kinematics import Kinematics, com_acceleration
 from powerkettle.orientation import estimate_orientation
 from powerkettle.simulate import Hold, LieOnSide, Rest, SimConfig, Snatch, Swing, simulate
 
@@ -245,3 +245,72 @@ def test_static_signal_has_no_lows():
     anchors = detect_anchors(imu, q, kin, calib, AnchorConfig())
     assert [a.kind for a in anchors] == ["rest"]
     assert (anchors[0].i0, anchors[0].i1) == (0, n - 1)
+
+
+def test_rest_lying_on_side_keeps_previous_forward():
+    """A bell lying on its side, rolled 90° about a horizontal axis 45° off forward, still has a
+    horizontal outward component (0.71): it must not re-define forward (that would turn the θ
+    plane by 45°); the previous forward is kept."""
+    calib = _synthetic_calib()
+    q = np.tile([1.0, 0.0, 0.0, 0.0], (60, 1))
+    axis = np.array([np.cos(np.pi / 4), np.sin(np.pi / 4), 0.0])
+    q[30:40] = np.concatenate([[np.cos(np.pi / 4)], np.sin(np.pi / 4) * axis])  # 90° about axis
+    rolled = Anchor(30, 39, "rest")
+    with pytest.raises(ValueError):
+        rest_forward(q, calib, rolled)
+    anchors = [Anchor(0, 9, "rest"), Anchor(15, 15, "low"), Anchor(20, 20, "top_swing"),
+               Anchor(25, 25, "low"), rolled, Anchor(45, 45, "low"), Anchor(50, 50, "top_swing"),
+               Anchor(55, 55, "low")]
+    f1, f2 = set_forwards(q, calib, anchors)
+    assert np.allclose(f1, [1.0, 0.0, 0.0]) and np.allclose(f2, f1)
+
+
+def _apex_session():
+    run, truth = simulate([Rest(3), Swing(5), Rest(3)], BELL)
+    return scale_run(run), truth
+
+
+def test_gap_at_backswing_apex_keeps_the_low():
+    """Three invalid samples (missing data) centred on a backswing apex: the low survives."""
+    imu, truth = _apex_session()
+    lows = sorted({r.i_low for r in truth.reps} | {r.i_end for r in truth.reps})
+    k = lows[3]
+    imu.valid[k - 1:k + 2] = False
+    imu.acc[k - 1:k + 2] = np.nan
+    imu.gyro[k - 1:k + 2] = np.nan
+    calib = calibrate(imu, BELL)
+    q, bias = estimate_orientation(imu, calib, return_bias=True)
+    kin = com_acceleration(imu, q, calib, bias)
+    got = [a.i0 for a in detect_anchors(imu, q, kin, calib) if a.kind == "low"]
+    assert len(got) == len(lows)
+    assert np.max(np.abs(np.array(got) - lows)) <= POINT_TOL
+
+
+def test_invalid_guard_samples_at_theta_peak_keep_the_low():
+    """Gap-guard samples (data present but untrusted) exactly at the θ peak: the |f| gate looks
+    at the valid samples within ±25 ms instead of the peak sample alone."""
+    imu, truth = _apex_session()
+    calib = calibrate(imu, BELL)
+    q, bias = estimate_orientation(imu, calib, return_bias=True)
+    kin = com_acceleration(imu, q, calib, bias)
+    clean = [a.i0 for a in detect_anchors(imu, q, kin, calib) if a.kind == "low"]
+    k = clean[3]
+    imu.valid[k - 1:k + 2] = False
+    got = [a.i0 for a in detect_anchors(imu, q, kin, calib) if a.kind == "low"]
+    assert got == clean
+
+
+def test_theta_peak_in_hand_held_window_is_never_a_low():
+    """Lockouts are θ maxima (+20° between −30° pull and drop, prominence 50°). Force |f| above
+    the low gate everywhere: only the hand-held exclusion keeps them from becoming lows."""
+    run, truth = simulate([Rest(3), Snatch(5, "R"), Hold(2), Rest(4)], BELL)
+    imu = scale_run(run)
+    calib = calibrate(imu, BELL)
+    q, bias = estimate_orientation(imu, calib, return_bias=True)
+    kin = com_acceleration(imu, q, calib, bias)
+    loud = Kinematics(kin.a_com, kin.omega_w, kin.alpha_w, np.full(len(imu.t), 3.0 * G))
+    anchors = detect_anchors(imu, q, loud, calib)
+    lockouts = [w for w in truth.anchor_windows if w[2] == "top_lockout"]
+    for i0, i1, _ in lockouts:
+        assert not [a for a in anchors if a.kind == "low" and i0 - 20 <= a.i0 <= i1 + 20]
+    assert_one_to_one(truth.anchor_windows, anchors)

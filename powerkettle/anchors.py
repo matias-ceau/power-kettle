@@ -21,9 +21,10 @@ before it (the calibration window before the first rest). The axis is always re-
 rest (absorbing gyro heading drift), but its sign is kept continuous with the previous forward:
 a forward that turns by more than 90° between rests is taken to be the bell parked turned round
 (or a hold without tremor, where the hand has twisted the bell 180°, provisionally taken as a
-rest), not the athlete turning round. Cost: a lifter who really turns round between sets gets an
-inverted θ for that set (lows and tops missed) until the next rest; to validate on real data. A
-rest whose outward axis is close to vertical gives no forward and the previous one is kept.
+rest), not the athlete turning round. A rest only gives a forward if the bell stands upright
+(mean bell-up within ``forward_upright_max_deg`` of vertical): a bell lying on its side, rolled
+about an arbitrary axis, would tilt the θ plane; such a rest keeps the previous forward. Cost: a lifter who really turns round between sets gets an
+inverted θ for that set (lows and tops missed) until the next rest; to validate on real data.
 
 Sets in anchor terms
 --------------------
@@ -35,8 +36,10 @@ rest between them, so a rest is always next to a low or another rest, never a to
 Known limits (to validate on real data)
 ---------------------------------------
 - A set ends only at a rest (≥ ``rest_min_s``, no tremor). If the bell only touches the floor
-  between two sets, the two lows around the touch are consecutive and a ``top_swing`` is placed
-  at the floor touch; the classifier labels that "rep" other (negative apex).
+  between two sets, the two lows around the touch are consecutive and a top is placed at the
+  touch: a ``top_lockout`` if the bell sat static for ≥ ``static_min_s`` (but < ``rest_min_s``),
+  else a ``top_swing`` at the θ minimum. A floor rest split by a BLE gap into pieces shorter than
+  ``rest_min_s`` behaves the same. The classifier labels such a "rep" other (negative apex).
 - If a snatch lockout is too short or unsteady for ``static_mask``, no hand-held window lies
   between its lows and the θ minimum is taken as a ``top_swing``: that is the mid-pull (or drop)
   minimum, not a zero-velocity point.
@@ -55,7 +58,8 @@ from .imu import G, ImuData
 from .kinematics import Kinematics
 from .orientation import _runs, static_mask
 
-MIN_FORWARD_NORM = 0.5  # |mean horizontal(R·out)| below this: outward axis too close to vertical
+LOW_GATE_HALF_S = 0.025  # the |f| gate of a low looks this far (±10 samples at 400 Hz) around it
+HELD_MARGIN_S = 0.05  # no low this close to a hand-held static window (θ plateau edges)
 
 
 @dataclass
@@ -67,6 +71,7 @@ class AnchorConfig:
     tremor_band: tuple = (4.0, 12.0)  # Hz, physiological tremor
     tremor_rms_max: float = 0.02  # m/s², band RMS of f above which a static window is hand-held
     floor_max_height_m: float = 0.8  # used by Task 8 (refine_rests)
+    forward_upright_max_deg: float = 20.0  # a rest gives a forward only if the bell is this upright
 
 
 @dataclass(order=True)
@@ -104,36 +109,42 @@ def sagittal_tilt(quats: np.ndarray, calib: Calibration, forward_w: np.ndarray) 
     return np.arctan2(up @ np.asarray(forward_w, dtype=float), up[:, 2])
 
 
-def _window_forward(quats: np.ndarray, calib: Calibration, i0: int, i1: int) -> np.ndarray:
+def _window_forward(quats: np.ndarray, calib: Calibration, i0: int, i1: int,
+                    upright_max_deg: float) -> np.ndarray:
+    up = quat.rotate(quats[i0:i1 + 1], calib.up_s).mean(axis=0)
+    tilt = math.degrees(math.atan2(math.hypot(up[0], up[1]), up[2]))
+    if tilt > upright_max_deg:
+        raise ValueError(f"rest {i0}..{i1}: bell-up {tilt:.0f}° from vertical (not standing "
+                         f"upright), forward undefined")
     out = quat.rotate(quats[i0:i1 + 1], calib.out_s).mean(axis=0)
     h = np.array([-out[0], -out[1], 0.0])
-    norm = float(np.linalg.norm(h))
-    if norm < MIN_FORWARD_NORM:
-        raise ValueError(f"rest {i0}..{i1}: outward axis near vertical, forward undefined")
-    return h / norm
+    return h / np.linalg.norm(h)  # upright => outward within upright_max_deg of horizontal
 
 
-def rest_forward(quats: np.ndarray, calib: Calibration, rest: Anchor) -> np.ndarray:
+def rest_forward(quats: np.ndarray, calib: Calibration, rest: Anchor,
+                 upright_max_deg: float = AnchorConfig.forward_upright_max_deg) -> np.ndarray:
     """Unit horizontal forward −horizontal(R·out_s), averaged over the rest window. Raises
-    ValueError if the outward axis is too close to vertical (bell lying on a flat)."""
-    return _window_forward(quats, calib, rest.i0, rest.i1)
+    ValueError unless the bell stands upright there (mean bell-up within `upright_max_deg` of
+    vertical); a bell lying on its side or a flat gives no forward."""
+    return _window_forward(quats, calib, rest.i0, rest.i1, upright_max_deg)
 
 
-def _forward_chain(quats: np.ndarray, calib: Calibration,
-                   rests: list[tuple[int, int]]) -> tuple[np.ndarray, list[np.ndarray]]:
+def _forward_chain(quats: np.ndarray, calib: Calibration, rests: list[tuple[int, int]],
+                   upright_max_deg: float) -> tuple[np.ndarray, list[np.ndarray]]:
     """Forward of the calibration window, then of each rest (i0, i1) in order: the rest's own
     axis with its sign kept continuous with the previous forward; the previous forward where the
-    rest gives none."""
+    rest gives none (bell not upright)."""
     still = calib.still
     try:
-        prev = _window_forward(quats, calib, int(still.start or 0), int(still.stop) - 1)
+        prev = _window_forward(quats, calib, int(still.start or 0), int(still.stop) - 1,
+                               upright_max_deg)
     except ValueError:
         prev = np.array([1.0, 0.0, 0.0])  # calibration defines world +x as forward
     first = prev
     chain = []
     for i0, i1 in rests:
         try:
-            f = _window_forward(quats, calib, i0, i1)
+            f = _window_forward(quats, calib, i0, i1, upright_max_deg)
             if f @ prev < 0.0:
                 f = -f
         except ValueError:
@@ -143,12 +154,14 @@ def _forward_chain(quats: np.ndarray, calib: Calibration,
     return first, chain
 
 
-def set_forwards(quats: np.ndarray, calib: Calibration, anchors: list[Anchor]) -> list[np.ndarray]:
+def set_forwards(quats: np.ndarray, calib: Calibration, anchors: list[Anchor],
+                 cfg: AnchorConfig = AnchorConfig()) -> list[np.ndarray]:
     """One unit horizontal forward per set (run of non-rest anchors between rests), read from the
-    rest before the set (the calibration window if no rest precedes it), sign-continuous."""
+    rest before the set (the calibration window if no rest precedes it), sign-continuous; a rest
+    where the bell is not upright keeps the previous forward."""
     anchors = sorted(anchors)
     rests = [(a.i0, a.i1) for a in anchors if a.kind == "rest"]
-    first, chain = _forward_chain(quats, calib, rests)
+    first, chain = _forward_chain(quats, calib, rests, cfg.forward_upright_max_deg)
     out: list[np.ndarray] = []
     current, k, in_set = first, 0, False
     for a in anchors:
@@ -173,6 +186,15 @@ def _static_windows(imu: ImuData, cfg: AnchorConfig) -> tuple[list, list]:
         quiet = tremor_rms(imu.acc[a:b], imu.fs, cfg.tremor_band) <= cfg.tremor_rms_max
         (rests if quiet and b - a >= need_rest else held).append((a, b))
     return rests, held
+
+
+def _f_gate(f_norm: np.ndarray, valid: np.ndarray, half: int, f_min: float) -> np.ndarray:
+    """(N,) bool: the max |f| over the valid samples within ±`half` samples reaches `f_min`
+    (False where that neighbourhood holds no valid sample). A window rather than the θ-peak
+    sample alone, so one invalid (gap-guard) sample at a backswing apex does not drop the low."""
+    f = np.where(valid & np.isfinite(f_norm), f_norm, -np.inf)
+    padded = np.concatenate([np.full(half, -np.inf), f, np.full(half, -np.inf)])
+    return np.lib.stride_tricks.sliding_window_view(padded, 2 * half + 1).max(axis=1) >= f_min
 
 
 def _prominence(th: np.ndarray, i: int) -> float:
@@ -203,18 +225,21 @@ def detect_anchors(imu: ImuData, quats: np.ndarray, kin: Kinematics, calib: Cali
        f (`tremor_rms`) is at most `tremor_rms_max` and it lasts `rest_min_s`; otherwise hand-held.
     2. Between rests, θ uses the forward of the rest before (see the module docstring).
     3. Lows: local maxima of θ with prominence ≥ `prominence_deg` (within the stretch between
-       rests), outside hand-held static windows, at a valid sample with |f| ≥ `low_min_f_g`·g.
+       rests), outside hand-held static windows (widened by ±50 ms), with |f| ≥ `low_min_f_g`·g at some valid sample
+       within ±25 ms.
     4. Between consecutive lows of a stretch: the longest hand-held static window inside the
        interval (`top_lockout`), else the θ minimum (`top_swing`).
     """
     n = len(imu.t)
     rests, held_wins = _static_windows(imu, cfg)
-    held = np.zeros(n, dtype=bool)
+    held = np.zeros(n, dtype=bool)  # hand-held windows, widened: the θ maximum of a lockout
+    margin = round(HELD_MARGIN_S * imu.fs)  # plateau can fall a few samples outside the window
     for a, b in held_wins:
-        held[a:b] = True
-    with np.errstate(invalid="ignore"):
-        f_ok = imu.valid & (kin.f_norm >= cfg.low_min_f_g * G)
-    first, chain = _forward_chain(quats, calib, [(a, b - 1) for a, b in rests])
+        held[max(0, a - margin):b + margin] = True
+    f_ok = _f_gate(kin.f_norm, imu.valid, max(0, round(LOW_GATE_HALF_S * imu.fs)),
+                   cfg.low_min_f_g * G)
+    first, chain = _forward_chain(quats, calib, [(a, b - 1) for a, b in rests],
+                                  cfg.forward_upright_max_deg)
 
     anchors = [Anchor(a, b - 1, "rest") for a, b in rests]
     bounds = [0] + [x for a, b in rests for x in (a, b)] + [n]
