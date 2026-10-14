@@ -77,12 +77,16 @@ export class KettleBle extends EventTarget {
     this.#emit("disconnected", { willRetry: false });
   }
 
-  /** Control write (with response). Tracks start/stop so a reconnect can resume streaming. */
+  /**
+   * Control write (with response). Tracks start/stop so a reconnect can resume streaming.
+   * A stop is recorded as intent before the write, so it holds even if the link is down or
+   * the write fails: a reconnect must never re-send `start` after the caller asked to stop.
+   */
   async send(cmdBytes) {
+    if (cmdBytes[0] === 0x02) this.#streaming = false;
     if (!this.#control) throw new Error("not connected");
     await this.#control.writeValueWithResponse(cmdBytes);
     if (cmdBytes[0] === 0x01) this.#streaming = true;
-    else if (cmdBytes[0] === 0x02) this.#streaming = false;
   }
 
   async #setup() {

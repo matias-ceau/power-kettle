@@ -196,9 +196,9 @@ async function stopStreaming() {
   ticker = null;
   recorder.event({ e: "stop" }, phoneNow());
   releaseWakeLock();
-  if (linkState === "connected") {
-    try { await withTimeout(ble.send(encodeCommand("stop")), STOP_WRITE_TIMEOUT_MS); } catch (err) { console.warn("stop write failed", err); }
-  }
+  // Always call send(): it records the stop intent even when the link is down, so a pending
+  // reconnect will not resume streaming. The write itself only succeeds while connected.
+  try { await withTimeout(ble.send(encodeCommand("stop")), STOP_WRITE_TIMEOUT_MS); } catch (err) { console.warn("stop not delivered", err); }
 }
 
 function download(file) {

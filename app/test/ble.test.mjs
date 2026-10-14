@@ -153,3 +153,36 @@ test("a reconnect that reuses characteristic objects does not duplicate packets"
   c.dispatchEvent(new Event("characteristicvaluechanged"));
   assert.equal(n, 1);
 });
+
+test("stop requested while the retry loop sleeps: reconnect does not re-send start", async () => {
+  const f = makeFake();
+  let release;
+  const gate = new Promise((r) => { release = r; });
+  const ble = new KettleBle({ bluetooth: f.bluetooth, sleepFn: () => gate });
+  await ble.connect();
+  await ble.send(Uint8Array.of(1));
+  f.device.gatt.disconnect(); // link drop; retry loop now sleeping
+  await tick();
+  await assert.rejects(ble.send(Uint8Array.of(2)), /not connected/); // stop cannot be delivered
+  f.log.length = 0;
+  release();
+  await tick(); await tick(); await tick();
+  assert.deepEqual(f.log.slice(0, 2).sort(), ["notify:f3a10002", "notify:f3a10004"]);
+  assert.ok(!f.log.some((l) => l.startsWith("write:")), JSON.stringify(f.log));
+});
+
+test("a failed stop write still clears the resume-streaming intent", async () => {
+  const f = makeFake();
+  const ble = new KettleBle({ bluetooth: f.bluetooth, sleepFn: instant });
+  await ble.connect();
+  await ble.send(Uint8Array.of(1));
+  const c = f.device.chars[CONTROL_UUID];
+  const ok = c.writeValueWithResponse;
+  c.writeValueWithResponse = async () => { throw new Error("gatt error"); };
+  await assert.rejects(ble.send(Uint8Array.of(2)), /gatt error/);
+  c.writeValueWithResponse = ok;
+  f.log.length = 0;
+  f.device.gatt.disconnect();
+  await tick(); await tick();
+  assert.ok(!f.log.some((l) => l.startsWith("write:")), JSON.stringify(f.log));
+});
