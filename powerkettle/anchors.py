@@ -70,7 +70,7 @@ class AnchorConfig:
     rest_min_s: float = 2.0
     tremor_band: tuple = (4.0, 12.0)  # Hz, physiological tremor
     tremor_rms_max: float = 0.02  # m/s², band RMS of f above which a static window is hand-held
-    floor_max_height_m: float = 0.8  # used by Task 8 (refine_rests)
+    floor_max_height_m: float = 0.8  # a rest this high above its low is a lockout
     forward_upright_max_deg: float = 20.0  # a rest gives a forward only if the bell is this upright
 
 
@@ -260,3 +260,31 @@ def detect_anchors(imu: ImuData, quats: np.ndarray, kin: Kinematics, calib: Cali
                 i = s0 + l0 + int(np.argmin(th[l0:l1 + 1]))
                 anchors.append(Anchor(i, i, "top_swing"))
     return sorted(anchors)
+
+
+def refine_rests(anchors: list[Anchor], pos: np.ndarray,
+                 cfg: AnchorConfig = AnchorConfig()) -> list[Anchor]:
+    """Re-label as ``top_lockout`` every rest window held at least `floor_max_height_m` above the
+    preceding low anchor of its set (a tremor-free overhead hold, which ``detect_anchors`` cannot
+    tell from a floor rest). Height = pos z at the window's middle sample minus pos z at that
+    low, with `pos` from ``integrate.segment_position`` on these anchors (inside a rest it stays
+    at the height reached on entering it). A rest whose set has no low before it (the anchor
+    before it is a rest, or none) or whose height is NaN stays a rest. Returns a new sorted
+    list; the input is not modified. Callers then re-run ``segment_velocity`` /
+    ``segment_position`` once on the result (a lockout is a zero-velocity window over its full
+    length and position no longer restarts after it)."""
+    anchors = sorted(anchors)
+    out: list[Anchor] = []
+    last_low: Anchor | None = None
+    for a in anchors:
+        if a.kind == "low":
+            last_low = a
+        elif a.kind == "rest":
+            if last_low is not None:
+                height = float(pos[(a.i0 + a.i1) // 2, 2] - pos[last_low.i0, 2])
+                if height >= cfg.floor_max_height_m:  # False for NaN
+                    out.append(Anchor(a.i0, a.i1, "top_lockout"))
+                    continue
+            last_low = None  # a (floor) rest ends the set
+        out.append(a)
+    return out
