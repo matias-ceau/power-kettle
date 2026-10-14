@@ -16,7 +16,7 @@ from powerkettle.pipeline import (
     map_markers,
 )
 from powerkettle.rawlog import RawRecord, Run, write_rawlog
-from powerkettle.session_io import load_session, save_session
+from powerkettle.session_io import load_session, reanalyse, save_session
 from powerkettle.simulate import Rest, SimConfig, Snatch, Swing, simulate
 
 SESSION = [Rest(3), Snatch(8, "L"), Rest(6), Swing(10), Rest(6), Snatch(8, "R"), Rest(3)]
@@ -134,6 +134,17 @@ def test_labels_override_classifier(sim, clean):
     assert res.metrics.reps_by_kind_hand["snatch:L"] == 8  # 7 left + rep 20
     with pytest.raises(ValueError, match="kind"):
         analyse_run(sim[0], labels={0: {"kind": "clean"}})
+
+
+@pytest.mark.parametrize("label", [
+    {"kind": "swing", "hand": "L"}, {"kind": "other", "hand": "?"},
+    {"hand": "R"},  # rep 9 is a swing
+    {"kind": "snatch", "hand": "-"}, {"kind": "snatch", "hand": "X"},
+])
+def test_labels_reject_hand_inconsistent_with_kind(sim, label):
+    """Hand L / R / ? only for a snatch; "-" only for swing / other."""
+    with pytest.raises(ValueError, match="hand"):
+        analyse_run(sim[0], labels={9: label})
 
 
 # ----------------------------------------------------------------------------- summary
@@ -267,3 +278,24 @@ def test_cli_multi_run_carries_calibration(sim, tmp_path, capsys):
     r1, _, m1 = load_session(tmp_path / "m.run1.npz")
     assert np.array_equal(r0.raw, run.raw) and np.array_equal(r1.raw, run2.raw)
     assert "calibration carried over from previous run" in m1["summary"]["warnings"]
+    # the carried calibration travels with the session: re-analysis reproduces the summary
+    assert m1["calibration"]["carried"] is True
+    with pytest.raises(CalibrationError):
+        analyse_run(r1, BellProfile())
+    _, bell1, m1 = load_session(tmp_path / "m.run1.npz")
+    assert reanalyse(r1, bell1, m1).summary() == m1["summary"]
+    assert main(["analyse", str(tmp_path / "m.run1.npz")]) == 0
+    assert "calibration carried over from previous run" in capsys.readouterr().out
+
+
+def test_cli_out_without_suffix_gets_npz(tmp_path, capsys):
+    run, _ = simulate([Rest(3), Swing(3), Rest(3)])
+    run2, _ = simulate([Rest(3), Swing(3), Rest(3)], cfg=SimConfig(seed=4))
+    recs = run_records(run) + run_records(run2, offset_ms=60_000.0)
+    recs.sort(key=lambda r: r.phone_ms)
+    write_rawlog(tmp_path / "m.pkraw", {"app": "powerkettle-record", "v": 1}, recs)
+    assert main(["analyse", str(tmp_path / "m.pkraw"), "--out", str(tmp_path / "o")]) == 0
+    out = capsys.readouterr().out
+    assert f"saved: {tmp_path / 'o.npz'}" in out
+    assert f"saved: {tmp_path / 'o.run1.npz'}" in out
+    assert sorted(p.name for p in tmp_path.glob("o*")) == ["o.npz", "o.run1.npz"]

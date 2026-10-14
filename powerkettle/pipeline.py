@@ -10,8 +10,9 @@ Labels
 ``labels`` maps a rep's session-wide index (0-based, in time order across sets) to
 ``{"kind": …, "hand": …}`` (either key optional). A label overrides the classifier and adds the
 flag "relabelled". A kind other than snatch without a hand gets hand "-"; a snatch without a hand
-keeps the classifier's hand if it was already a snatch, else "?". Labels for indices past the
-reps found are ignored.
+keeps the classifier's hand if it was already a snatch, else "?". A hand must fit the kind:
+L / R / ? for a snatch, "-" for swing and other; anything else (e.g. a hand-only label "L" on a
+rep classified swing) raises ValueError. Labels for indices past the reps found are ignored.
 
 Markers
 -------
@@ -45,7 +46,7 @@ from .reps import Rep, SetResult, build_sets, segment_sets
 
 ALGORITHM_VERSION = "1"
 KINDS = ("snatch", "swing", "other")
-HANDS = ("L", "R", "?", "-")
+SNATCH_HANDS = ("L", "R", "?")  # a snatch's hand; swing and other always have "-"
 WARN_NOMINAL_RATE = "sample rate nominal (no status data)"
 WARN_CARRIED_CALIBRATION = "calibration carried over from previous run"
 
@@ -152,8 +153,10 @@ def _apply_labels(reps: list[Rep], labels: dict) -> None:
             hand = r.hand if r.kind == "snatch" else "?"
         else:
             hand = "-"
-        if hand not in HANDS:
-            raise ValueError(f"label for rep {i}: hand {hand!r} not in {HANDS}")
+        allowed = SNATCH_HANDS if kind == "snatch" else ("-",)
+        if hand not in allowed:
+            raise ValueError(f"label for rep {i}: hand {hand!r} invalid for kind {kind!r} "
+                             f"(allowed: {allowed})")
         r.kind, r.hand = kind, hand
         r.flags.add("relabelled")
 

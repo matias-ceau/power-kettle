@@ -6,7 +6,13 @@ import pytest
 
 from powerkettle.bell import BellProfile
 from powerkettle.pipeline import ALGORITHM_VERSION, analyse_run
-from powerkettle.session_io import load_session, save_session
+from powerkettle.session_io import (
+    calibration_from_dict,
+    calibration_to_dict,
+    load_session,
+    reanalyse,
+    save_session,
+)
 from powerkettle.simulate import Rest, Snatch, Swing, simulate
 
 LABELS = {3: {"kind": "other"}, 7: {"kind": "snatch", "hand": "L"}}
@@ -82,7 +88,7 @@ def test_load_tolerates_missing_meta_fields(run):
     assert bell == BellProfile()
     assert meta["labels"] == {} and meta["markers"] == []
     assert meta["app_version"] is None and meta["algorithm_version"] is None
-    assert meta["summary"] is None
+    assert meta["summary"] is None and meta["calibration"] is None
     assert run2.rate_estimated is False and run2.statuses == []
     assert run2.packet_times.shape == (0, 2)
 
@@ -99,3 +105,28 @@ def test_load_rejects_foreign_files(tmp_path):
     np.savez_compressed(tmp_path / "y.npz", a=np.zeros(3))
     with pytest.raises(ValueError, match="not a powerkettle .npz session"):
         load_session(tmp_path / "y.npz")
+
+
+def test_calibration_roundtrip_exact(run):
+    res = analyse_run(run, BELL)
+    d = calibration_to_dict(res.calib, carried=False)
+    buf = io.BytesIO()
+    save_session(buf, run, BELL, {"calibration": d})
+    buf.seek(0)
+    _, _, meta = load_session(buf)
+    assert meta["calibration"] == d and meta["calibration"]["carried"] is False
+    c = calibration_from_dict(meta["calibration"])
+    for name in ("gyro_bias", "up_s", "out_s", "lever_arm_s", "q0"):
+        assert np.array_equal(getattr(c, name), getattr(res.calib, name)), name
+    assert (c.still, c.g_measured, c.warnings) == (res.calib.still, res.calib.g_measured,
+                                                   res.calib.warnings)
+
+
+def test_reanalyse_uses_labels_and_stored_calibration(run):
+    res = analyse_run(run, BELL, labels=LABELS)
+    meta = {"labels": LABELS, "calibration": calibration_to_dict(res.calib, carried=False)}
+    buf = io.BytesIO()
+    save_session(buf, run, BELL, meta)
+    buf.seek(0)
+    run2, bell2, meta2 = load_session(buf)
+    assert reanalyse(run2, bell2, meta2).summary() == res.summary()

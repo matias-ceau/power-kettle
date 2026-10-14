@@ -10,6 +10,11 @@ Keys
   current one) and ``rate_estimated`` (whether ``rate_hz`` was fitted from status data: kept
   so that re-analysing a loaded run reproduces the same warnings and summary).
 
+``calibration`` (``calibration_to_dict``) is the calibration the run was analysed with, with a
+``carried`` flag: a run without a still window (after a reconnect) is analysed with the previous
+run's calibration, which cannot be rebuilt from its own samples, so ``reanalyse`` passes it back
+to ``analyse_run`` as ``prior_calib`` (used only when the run cannot calibrate itself).
+
 Conventions for the meta written by the CLI: ``labels`` maps the rep index (JSON string key) to
 ``{"kind", "hand"}``; ``markers`` is a list of ``{"phone_ms", "text", "sample_index"}``, the
 phone-clock markers already placed on the run's sample index (``pipeline.map_markers``), since
@@ -30,11 +35,39 @@ from typing import BinaryIO
 import numpy as np
 
 from .bell import BellProfile
-from .pipeline import ALGORITHM_VERSION
+from .calibration import Calibration
+from .pipeline import ALGORITHM_VERSION, AnalysisConfig, SessionResult, analyse_run
 from .rawlog import Run
 
 META_DEFAULTS = {"labels": {}, "markers": [], "app_version": None, "algorithm_version": None,
-                 "summary": None}
+                 "summary": None, "calibration": None}
+_CALIB_VECTORS = ("gyro_bias", "up_s", "out_s", "lever_arm_s", "q0")
+
+
+def calibration_to_dict(calib: Calibration, carried: bool) -> dict:
+    """JSON-safe dict of `calib` (vectors as lists, ``still`` as [start, stop]) plus the flag
+    `carried` (taken over from a previous run). Floats round-trip exactly through JSON."""
+    d = {name: [float(x) for x in getattr(calib, name)] for name in _CALIB_VECTORS}
+    d.update(still=[int(calib.still.start or 0), int(calib.still.stop)],
+             g_measured=float(calib.g_measured), warnings=list(calib.warnings),
+             carried=bool(carried))
+    return d
+
+
+def calibration_from_dict(d: dict) -> Calibration:
+    """Inverse of ``calibration_to_dict`` (the ``carried`` flag is dropped)."""
+    return Calibration(*(np.asarray(d[name], dtype=float) for name in _CALIB_VECTORS),
+                       still=slice(*d["still"]), g_measured=float(d["g_measured"]),
+                       warnings=list(d.get("warnings", [])))
+
+
+def reanalyse(run: Run, bell: BellProfile, meta: dict,
+              cfg: AnalysisConfig = AnalysisConfig()) -> SessionResult:
+    """``analyse_run`` on a loaded session with its stored labels and, as ``prior_calib``, its
+    stored calibration (if any)."""
+    calib = meta.get("calibration")
+    return analyse_run(run, bell, cfg, labels=meta.get("labels") or None,
+                       prior_calib=calibration_from_dict(calib) if calib else None)
 
 
 def save_session(path_or_buffer: str | os.PathLike | BinaryIO, run: Run, bell: BellProfile,

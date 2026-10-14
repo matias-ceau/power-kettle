@@ -8,8 +8,10 @@ starts a new run; a run without a still window reuses the previous run's calibra
 one line per set and a rep table. Each set line shows the nearest marker at or before the set's
 start, so a set with no new marker since the previous one repeats it. A ``.npz`` session
 brings its own bell, labels and markers (stored with their sample index); ``--bell``
-overrides the bell. ``--out`` saves each run as a ``.npz`` session: run 0 to ``out.npz``, run
-K > 0 to ``out.runK.npz``.
+overrides the bell. A ``.npz`` also brings the calibration it was analysed with (needed for a
+run that carried the previous run's calibration over). ``--out`` saves each run as a ``.npz``
+session, with its calibration: run 0 to ``out.npz``, run K > 0 to ``out.runK.npz`` (".npz" is
+appended to ``out`` unless it ends so); each saved path is printed.
 """
 from __future__ import annotations
 
@@ -21,9 +23,14 @@ from pathlib import Path
 
 from .bell import BellProfile
 from .calibration import CalibrationError
-from .pipeline import SessionResult, analyse_run, map_markers
+from .pipeline import WARN_CARRIED_CALIBRATION, SessionResult, analyse_run, map_markers
 from .rawlog import Run, read_rawlog, to_recording
-from .session_io import load_session, save_session
+from .session_io import (
+    calibration_from_dict,
+    calibration_to_dict,
+    load_session,
+    save_session,
+)
 
 
 def info(path: str) -> str:
@@ -63,19 +70,21 @@ def _app_version(meta: dict) -> str | None:
     return f"{meta['app']}/{meta['v']}" if "app" in meta and "v" in meta else None
 
 
-def _load(path: str) -> tuple[list[tuple[Run, list[dict]]], BellProfile, dict, str | None]:
-    """([(run, markers)], bell, labels, app version) of a .pkraw or .npz file; markers as
-    {"phone_ms", "text", "sample_index"} dicts."""
+def _load(path: str) -> tuple[list[tuple[Run, list[dict]]], BellProfile, dict, str | None,
+                              dict | None]:
+    """([(run, markers)], bell, labels, app version, stored calibration dict or None) of a
+    .pkraw or .npz file; markers as {"phone_ms", "text", "sample_index"} dicts."""
     if Path(path).suffix.lower() == ".npz":
         run, bell, meta = load_session(path)
-        return [(run, list(meta["markers"]))], bell, meta["labels"], meta["app_version"]
+        return ([(run, list(meta["markers"]))], bell, meta["labels"], meta["app_version"],
+                meta["calibration"])
     rec = to_recording(read_rawlog(path))
     runs = []
     for run in rec.runs:
         mapped = map_markers(run, rec.markers)
         runs.append((run, [{"phone_ms": ms, "text": text, "sample_index": i}
                            for (ms, text), (i, _) in zip(rec.markers, mapped)]))
-    return runs, BellProfile(), {}, _app_version(rec.meta)
+    return runs, BellProfile(), {}, _app_version(rec.meta), None
 
 
 def _marker_before(markers: list[dict], sample_index: int) -> str | None:
@@ -121,18 +130,24 @@ def _report(k: int, run: Run, res: SessionResult, markers: list[dict]) -> list[s
 
 
 def _out_path(out: str, k: int) -> Path:
+    """Run 0: `out`, with ".npz" appended unless it already ends so; run K > 0: the same with
+    ".runK" inserted before ".npz"."""
     p = Path(out)
-    return p if k == 0 else p.with_name(f"{p.stem}.run{k}{p.suffix or '.npz'}")
+    if p.suffix.lower() != ".npz":
+        p = p.with_name(p.name + ".npz")
+    return p if k == 0 else p.with_name(f"{p.stem}.run{k}{p.suffix}")
 
 
 def analyse(path: str, bell_path: str | None = None, out: str | None = None) -> int:
-    runs, bell, labels, app_version = _load(path)
+    runs, bell, labels, app_version, stored_calib = _load(path)
     if bell_path is not None:
         with open(bell_path, encoding="utf-8") as f:
             bell = BellProfile.from_dict(json.load(f))
     print(f"file: {path}")
     print(f"bell: {bell.mass_kg:g} kg")
-    analysed, prior = 0, None
+    analysed = 0
+    # a .npz brings the calibration it was analysed with; later runs reuse the previous run's
+    prior = calibration_from_dict(stored_calib) if stored_calib else None
     for k, (run, markers) in enumerate(runs):
         if len(run.sample_index) == 0:
             continue
@@ -145,10 +160,13 @@ def analyse(path: str, bell_path: str | None = None, out: str | None = None) -> 
         analysed += 1
         print("\n".join(_report(k, run, res, markers)))
         if out is not None:
+            carried = WARN_CARRIED_CALIBRATION in res.warnings
             meta = {"labels": labels, "markers": markers, "app_version": app_version,
+                    "calibration": calibration_to_dict(res.calib, carried),
                     "summary": res.summary()}
-            save_session(_out_path(out, k), run, bell, meta)
-            print(f"saved: {_out_path(out, k)}")
+            dest = _out_path(out, k)
+            save_session(dest, run, bell, meta)
+            print(f"saved: {dest}")
     return 0 if analysed else 1
 
 
@@ -164,8 +182,8 @@ def main(argv: list[str] | None = None) -> int:
     p_an.add_argument("file", help=".pkraw recording or .npz session")
     p_an.add_argument("--bell", help="bell profile JSON (BellProfile fields; overrides the bell "
                                      "stored in a .npz)")
-    p_an.add_argument("--out", help="save each run as a .npz session: run 0 to OUT, run K > 0 "
-                                    "to OUT's stem + '.runK.npz'")
+    p_an.add_argument("--out", help="save each run as a .npz session: run 0 to OUT.npz, run "
+                                    "K > 0 to OUT.runK.npz ('.npz' appended unless present)")
     args = ap.parse_args(argv)
     try:
         if args.cmd == "analyse":
