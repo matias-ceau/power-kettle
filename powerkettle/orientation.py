@@ -95,6 +95,36 @@ def _static_stretch(q_prev, dq, f_hat, rate):
     return np.array(out)
 
 
+def _bridge_gaps(omega: np.ndarray, ok: np.ndarray, fs: float,
+                 max_s: float) -> tuple[np.ndarray, np.ndarray]:
+    """`omega` and `ok` with every interior run of not-ok samples whose bracketing ok samples
+    p0 = a − 1 and p1 = b lie at most `max_s` apart filled (and marked ok) by a cubic Hermite
+    curve through p0 and p1. Each end's slope is the one-sample difference to its outer
+    neighbour (a − 2, b + 1) when that neighbour is ok, else the secant p0 → p1. With both
+    slopes at the secant, the curve is the straight line. Returns copies; the inputs are not
+    modified.
+
+    A cubic, not a straight line: in mid-pull the rate changes fast and a 0.1 s straight-line
+    bridge leaves about 2.7° of tilt error (see test_orientation)."""
+    omega, ok = omega.copy(), ok.copy()
+    src = ok.copy()  # slopes come from measured samples only, never from a filled gap
+    n = len(ok)
+    starts, stops = _runs(~ok)
+    for a, b in zip(starts, stops):
+        if a == 0 or b == n or (b - a + 1) / fs > max_s + 1e-9:
+            continue
+        p0, p1, span = omega[a - 1], omega[b], b - (a - 1)  # span in samples
+        secant = (p1 - p0) / span
+        m0 = omega[a - 1] - omega[a - 2] if a >= 2 and src[a - 2] else secant
+        m1 = omega[b + 1] - omega[b] if b + 1 < n and src[b + 1] else secant
+        s = ((np.arange(a, b) - (a - 1)) / span)[:, None]
+        h00, h10 = 2 * s**3 - 3 * s**2 + 1, s**3 - 2 * s**2 + s
+        h01, h11 = -2 * s**3 + 3 * s**2, s**3 - s**2
+        omega[a:b] = h00 * p0 + h10 * span * m0 + h01 * p1 + h11 * span * m1
+        ok[a:b] = True
+    return omega, ok
+
+
 def working_bias(imu: ImuData, bias0: np.ndarray, static: np.ndarray, start: int = 0,
                  min_seconds: float = 1.0, max_std: float = 0.01,
                  max_jump: float = 0.03) -> np.ndarray:
@@ -128,7 +158,8 @@ def working_bias(imu: ImuData, bias0: np.ndarray, static: np.ndarray, start: int
 
 def estimate_orientation(imu: ImuData, calib: Calibration, gain: float = 2.0,
                          bias_update_min_s: float = 1.0, bias_max_std: float = 0.01,
-                         bias_max_jump: float = 0.03, return_bias: bool = False):
+                         bias_max_jump: float = 0.03, return_bias: bool = False,
+                         gap_interp_max_s: float = 0.25):
     """(N, 4) world <- sensor orientation, scalar-first; with `return_bias` also the (N, 3)
     working gyro bias that was subtracted at each sample.
 
@@ -142,8 +173,14 @@ def estimate_orientation(imu: ImuData, calib: Calibration, gain: float = 2.0,
     Starts from `calib.q0` at the start of the calibration window (earlier samples hold it) and
     integrates the bias-corrected gyro. Where `static_mask` is set, the tilt is corrected towards
     the measured gravity direction at rate `gain` (rad/s, per rad of tilt error; a step is capped
-    at the full error). Steps touching an invalid or missing sample do not rotate, so invalid
-    samples hold the last orientation."""
+    at the full error).
+
+    Gaps: for integration only, the bias-corrected gyro is interpolated (cubic Hermite,
+    ``_bridge_gaps``) across a run of invalid or missing samples between the valid samples on
+    either side, when those two samples lie at most `gap_interp_max_s` apart (a short BLE gap in mid-swing would otherwise
+    leave a tilt error that lasts until the next static window). Across longer gaps, and at
+    the start or end of the data, steps touching an invalid sample do not rotate, so those
+    samples hold the last orientation. The samples stay invalid for every other purpose."""
     n = len(imu.t)
     dt = 1.0 / imu.fs
     s0 = min(max(int(calib.still.start or 0), 0), n - 1)
@@ -157,6 +194,7 @@ def estimate_orientation(imu: ImuData, calib: Calibration, gain: float = 2.0,
                         bias_max_std, bias_max_jump)
     omega = imu.gyro - bias
     ok = imu.valid & np.all(np.isfinite(omega), axis=1)
+    omega, ok = _bridge_gaps(omega, ok, imu.fs, gap_interp_max_s)
     ok_s = ok[s0:]
     dq = _delta_quaternions(omega[s0:], ok_s[:-1] & ok_s[1:], dt)  # dq[j]: sample s0+j -> s0+j+1
     static = static_all[s0 + 1:]  # applies to the sample each step lands on

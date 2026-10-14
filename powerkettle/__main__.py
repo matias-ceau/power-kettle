@@ -5,9 +5,11 @@
 
 ``analyse`` runs ``pipeline.analyse_run`` on every run of the recording (a Bluetooth reconnect
 starts a new run; a run without a still window reuses the previous run's calibration) and prints
-one line per set (with the nearest marker at or before the set's start) and a rep table. A
-``.npz`` session brings its own bell and labels; ``--bell`` overrides the bell. ``--out`` saves
-each run as a ``.npz`` session (``out.npz``; ``out.run1.npz``, … for later runs).
+one line per set and a rep table. Each set line shows the nearest marker at or before the set's
+start, so a set with no new marker since the previous one repeats it. A ``.npz`` session
+brings its own bell, labels and markers (stored with their sample index); ``--bell``
+overrides the bell. ``--out`` saves each run as a ``.npz`` session: run 0 to ``out.npz``, run
+K > 0 to ``out.runK.npz``.
 """
 from __future__ import annotations
 
@@ -155,10 +157,15 @@ def main(argv: list[str] | None = None) -> int:
     sub = ap.add_subparsers(dest="cmd", required=True)
     p_info = sub.add_parser("info", help="summarise a .pkraw recording")
     p_info.add_argument("file")
-    p_an = sub.add_parser("analyse", help="analyse a .pkraw recording or .npz session")
-    p_an.add_argument("file")
-    p_an.add_argument("--bell", help="bell profile JSON (BellProfile fields)")
-    p_an.add_argument("--out", help="save the session(s) as .npz")
+    p_an = sub.add_parser(
+        "analyse", help="analyse a .pkraw recording or .npz session",
+        description="Analyse every run; print one line per set (with the nearest marker at or "
+                    "before its start, repeated while no new marker follows) and a rep table.")
+    p_an.add_argument("file", help=".pkraw recording or .npz session")
+    p_an.add_argument("--bell", help="bell profile JSON (BellProfile fields; overrides the bell "
+                                     "stored in a .npz)")
+    p_an.add_argument("--out", help="save each run as a .npz session: run 0 to OUT, run K > 0 "
+                                    "to OUT's stem + '.runK.npz'")
     args = ap.parse_args(argv)
     try:
         if args.cmd == "analyse":

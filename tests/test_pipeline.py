@@ -88,30 +88,24 @@ def test_power_floor_from_config(sim, clean):
 
 
 # ----------------------------------------------------------------------------- flags and labels
-@pytest.mark.parametrize("gap_rep, kinds_kept", [(4, True), (12, False)])
-def test_gap_inside_a_rep(sim, clean, gap_rep, kinds_kept):
+@pytest.mark.parametrize("gap_rep", [4, 12])  # a snatch, a swing (mid-set)
+def test_gap_inside_a_rep(sim, clean, gap_rep):
     """A 40-sample gap mid-concentric: that rep is flagged "gap" and left out of the power
-    statistics; every other rep keeps its power (within 0.01 %: velocity is integrated per segment).
-    Known limit (upstream, orientation): rotation is held across the gap, so in a swing set
-    (rep 12) the tilt error lasts until the next floor rest and the set's later swings are
-    misclassified "other" (low_conf); a snatch lockout re-levels it (rep 4)."""
+    statistics; every other rep keeps its kind and hand (truth), no flag, and its power (within
+    0.01 %: velocity is integrated per segment and orientation bridges the short gap)."""
     run, truth = sim
     tr = truth.reps[gap_rep]
-    kind = tr.kind
     res = analyse_run(with_gap(run, (tr.i_low + tr.i_top) // 2, GAP_LEN))
     reps, ref = reps_of(res), reps_of(clean)
-    assert len(reps) == len(ref)
+    assert len(reps) == len(ref) == len(truth.reps)
     assert "gap" in reps[gap_rep].flags
-    for i, (r, c) in enumerate(zip(reps, ref)):
+    for i, (r, c, t) in enumerate(zip(reps, ref, truth.reps)):
         if i != gap_rep:
-            assert "gap" not in r.flags, i
+            assert (r.kind, r.hand, r.flags) == (t.kind, t.hand, set()), i
             assert r.power_w == pytest.approx(c.power_w, rel=1e-4), i
-            if kinds_kept:
-                assert (r.kind, r.hand, r.flags) == (c.kind, c.hand, set()), i
-    if kinds_kept:
-        others = [c.power_w for i, c in enumerate(ref) if c.kind == kind and i != gap_rep]
-        assert res.metrics.by_kind[kind].n == len(others) == 15
-        assert res.metrics.by_kind[kind].avg == pytest.approx(np.mean(others), rel=1e-4)
+    others = [c.power_w for i, c in enumerate(ref) if c.kind == tr.kind and i != gap_rep]
+    assert res.metrics.by_kind[tr.kind].n == len(others)
+    assert res.metrics.by_kind[tr.kind].avg == pytest.approx(np.mean(others), rel=1e-4)
 
 
 def test_saturated_sample_flagged_and_counted(sim, clean):

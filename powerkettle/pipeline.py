@@ -85,6 +85,10 @@ _REP_FIELDS = ("i_low", "i_top", "i_top_end", "i_end", "kind", "hand", "confiden
 
 @dataclass
 class SessionResult:
+    """Result of ``analyse_run``. Beyond the session-level fields, ``set_metrics`` holds one
+    ``SetMetrics`` per set (computed with the config's power floor, so callers need not
+    recompute them) and ``t`` the run's sample times in s (rep start times in ``summary``
+    and the CLI)."""
     calib: Calibration
     sets: list[SetResult]
     metrics: SessionMetrics

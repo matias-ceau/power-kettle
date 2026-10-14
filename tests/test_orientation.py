@@ -243,3 +243,42 @@ def types_cal(bias, q0):
     return Calibration(gyro_bias=np.asarray(bias, float), up_s=Z.copy(), out_s=np.array([1.0, 0, 0]),
                        lever_arm_s=np.zeros(3), q0=np.asarray(q0, float), still=slice(0, 800),
                        g_measured=G)
+
+
+def test_short_gap_mid_swing_bridged():
+    """A 40-sample BLE gap in mid-swing: the gyro is interpolated across it for integration, so
+    the tilt after the gap stays < 2° from truth (holding the rotation instead leaves a large
+    error until the next rest). The gap samples stay invalid."""
+    run, truth = simulate([Rest(3), Swing(6), Rest(3)], BELL)
+    tr = truth.reps[2]
+    i0 = (tr.i_low + tr.i_top) // 2
+    keep = np.ones(len(run.sample_index), dtype=bool)
+    keep[i0:i0 + 40] = False
+    gapped = dataclasses.replace(run, sample_index=run.sample_index[keep], raw=run.raw[keep],
+                                 gaps=[(i0 - 1, i0 + 40)])
+    imu = scale_run(gapped)
+    assert not imu.valid[i0:i0 + 40].any()
+    cal = calibrate(imu, BELL)
+    after = slice(i0 + 42, len(imu.t))
+    err = np.degrees(tilt_error(estimate_orientation(imu, cal)[after], truth.quat_ws[after]))
+    assert err.max() < 2.0, f"max tilt error after the gap {err.max():.2f} deg"
+    held = estimate_orientation(imu, cal, gap_interp_max_s=0.0)[after]
+    assert np.degrees(tilt_error(held, truth.quat_ws[after])).max() > 10.0
+
+
+@pytest.mark.parametrize("n_bad, bridged", [(99, True), (100, False)])
+def test_gap_bridge_threshold_and_ramp(n_bad, bridged):
+    """Bridged when the valid samples either side lie ≤ 0.25 s apart ((n_bad + 1) / fs); a rate
+    ramp is reproduced exactly across a bridged gap. A longer gap holds the orientation."""
+    n = 1000
+    imu = synthetic(n, acc=(0.0, 0.0, 3 * G))  # never static
+    imu.gyro[:, 2] = np.linspace(0.0, 4.0, n)
+    ref = estimate_orientation(imu, types_cal(np.zeros(3), np.array([1.0, 0.0, 0.0, 0.0])))
+    imu.valid[300:300 + n_bad] = False
+    imu.gyro[300:300 + n_bad] = np.nan
+    q = estimate_orientation(imu, types_cal(np.zeros(3), np.array([1.0, 0.0, 0.0, 0.0])))
+    assert not imu.valid[300:300 + n_bad].any()  # the input is not modified
+    if bridged:
+        assert np.allclose(q, ref, atol=1e-9)
+    else:
+        assert np.allclose(q[299:300 + n_bad], q[299])

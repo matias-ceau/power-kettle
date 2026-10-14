@@ -6,8 +6,14 @@ Keys
 - ``gaps`` int64 (k, 2): (last index before the gap, first index after);
 - ``rate_hz`` float64 scalar; ``ranges`` int64 [acc_range_g, gyro_range_dps];
 - ``meta_json``: a JSON string holding the caller's meta (labels, markers, app version,
-  summary, …) plus ``bell`` (``BellProfile.to_dict``), ``algorithm_version`` and
-  ``rate_estimated``.
+  summary, …) plus ``bell`` (``BellProfile.to_dict``), ``algorithm_version`` (always the
+  current one) and ``rate_estimated`` (whether ``rate_hz`` was fitted from status data: kept
+  so that re-analysing a loaded run reproduces the same warnings and summary).
+
+Conventions for the meta written by the CLI: ``labels`` maps the rep index (JSON string key) to
+``{"kind", "hand"}``; ``markers`` is a list of ``{"phone_ms", "text", "sample_index"}``, the
+phone-clock markers already placed on the run's sample index (``pipeline.map_markers``), since
+the packet times needed to place them are not stored.
 
 ``load_session`` fills meta fields missing from older or foreign files with defaults (labels {},
 markers [], app_version / algorithm_version / summary None, the default bell, rate_estimated
