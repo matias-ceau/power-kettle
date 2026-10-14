@@ -331,11 +331,11 @@ def test_unbridged_gap_corrected_live():
 
 
 def test_unbridged_gap_without_correction_flags_live(monkeypatch):
-    """No tilt estimate possible (forced): live flags the same reps "orientation" as the
+    """No tilt correction (forced): live flags the same reps "orientation" as the
     batch, emitting them once the next static window closes the region (the gap rep's live
     flags cover only [low, top], before the region)."""
     import powerkettle.pipeline as pl
-    monkeypatch.setattr(pl, "GAP_TILT_MIN_S", 1e6)
+    monkeypatch.setattr(pl, "GAP_TILT_MAX_ITER", 0)
     run, truth = simulate([Rest(3), Swing(8), Rest(5), Snatch(4, "L"), Rest(4)])
     tr = truth.reps[3]
     run = without(run, (tr.i_low + tr.i_top) // 2, 200)
