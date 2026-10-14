@@ -42,6 +42,15 @@ def test_segment_reps():
     assert segment_reps([], 10) == []
 
 
+def test_final_top_without_closing_low_is_not_a_rep():
+    """Bell put down from the top (low -> top -> rest): no closing backswing, no rep; the set
+    still spans it."""
+    anchors = [Anchor(0, 99, "rest"), Anchor(120, 120, "low"), Anchor(200, 200, "top_swing"),
+               Anchor(280, 280, "low"), Anchor(360, 399, "top_lockout"), Anchor(500, 899, "rest")]
+    assert segment_reps(anchors, 900) == [(120, 200, 200, 280)]
+    assert segment_sets(anchors) == [(100, 499)]
+
+
 def test_segment_sets():
     # from the sample after the rest before to the sample before the rest after
     assert segment_sets(ANCHORS) == [(100, 499), (900, 1099)]
@@ -60,10 +69,12 @@ def test_moving_average_centred_truncated_and_nan_local():
     assert moving_average(x, 1) == pytest.approx(x)
     # k = 4: window [i − 2, i + 2), truncated at the ends
     assert moving_average(x, 4) == pytest.approx([0.5, 1.0, 1.5, 2.5, 3.5, 4.5, 5.5, 6.0])
-    x[2] = np.nan
-    m = moving_average(x, 4)
-    assert np.all(np.isnan(m[1:5]))  # the windows holding sample 2
-    assert m[[0, 5, 6, 7]] == pytest.approx([0.5, 4.5, 5.5, 6.0])
+    x[2] = np.nan  # averages of the finite samples only
+    assert moving_average(x, 4) == pytest.approx([0.5, 0.5, 4 / 3, 8 / 3, 4.0, 4.5, 5.5, 6.0])
+    with np.errstate(all="raise"):
+        m = moving_average(np.array([1.0, np.nan, np.nan, np.nan, 2.0]), 2)
+    # k = 2: window [i − 1, i + 1); windows 2 and 3 hold no finite sample
+    assert np.all(np.isnan(m[2:4])) and m[[0, 1, 4]] == pytest.approx([1.0, 1.0, 2.0])
 
 
 def synthetic_metrics_input():
@@ -114,6 +125,21 @@ def test_rep_metrics_flags_only_inside_the_rep():
     valid[450] = True
     v[320] = np.nan
     assert rep_metrics(seg, t, v, pos, P, valid, saturated)["flags"] == {"gap", "saturated"}
+
+
+@pytest.mark.parametrize("before", [1, 3, 5])
+def test_gap_just_before_the_low_does_not_touch_the_rep(before):
+    """A gap within the 25 ms smoothing reach before i_low (outside the rep): finite peak
+    power, unchanged metrics, no "gap" flag."""
+    seg, t, v, pos, P, valid, saturated = synthetic_metrics_input()
+    clean = rep_metrics(seg, t, v, pos, P, valid, saturated)
+    i = seg[0] - before
+    P[i], v[i], valid[i] = np.nan, np.nan, False
+    m = rep_metrics(seg, t, v, pos, P, valid, saturated)
+    assert m["flags"] == set()
+    assert np.isfinite(m["peak_power_w"])
+    for k in clean.keys() - {"flags"}:
+        assert m[k] == pytest.approx(clean[k]), k
 
 
 def test_rep_metrics_nan_velocity_gives_nan_power_without_warnings():
@@ -176,3 +202,14 @@ def test_low_conf_flag_from_config(session):
     reps = [r for st in sets for r in st.reps]
     assert all(("low_conf" in r.flags) == (r.confidence < 0.9) for r in reps)
     assert any("low_conf" in r.flags for r in reps)
+
+
+def test_set_without_reps_is_dropped_and_counted_as_rest():
+    """Picked up to the backswing and put down (one low, no rep): no set; its time and the
+    rests around it make up the next set's rest_before_s (3 + 1.8 + 4 s)."""
+    s = run_stages([Rest(3), Swing(0), Rest(4), Snatch(3, "R"), Rest(3)])
+    assert len(segment_sets(s.anchors)) == 2  # the aborted stretch is a run of its own
+    sets = build_sets(s.anchors, s.imu, s.q, s.calib, s.v, s.pos, s.P)
+    assert len(sets) == 1 and [r.kind for r in sets[0].reps] == ["snatch"] * 3
+    assert sets[0].rest_before_s == pytest.approx(8.8, abs=0.1)
+    assert sets[0].i_start == segment_sets(s.anchors)[1][0]

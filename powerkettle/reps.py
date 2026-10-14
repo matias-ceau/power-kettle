@@ -5,7 +5,9 @@ Reps
 A rep is a run of three consecutive anchors low → top → low (``segment_reps``): (i_low, i_top,
 i_top_end, i_end) with i_top / i_top_end the first / last sample of the top anchor (a lockout
 window; i_top_end = i_top for a ``top_swing``) and i_end the next low. Concentric phase =
-[i_low, i_top], eccentric phase = [i_top_end, i_end].
+[i_low, i_top], eccentric phase = [i_top_end, i_end]. A final top with no closing backswing
+(the bell put down from the top: low → top → rest) is not counted as a rep, nor is a rep whose
+next low lies past the recorded samples.
 
 Metrics (``rep_metrics``)
 -------------------------
@@ -13,8 +15,9 @@ Metrics (``rep_metrics``)
 - ``work_con_j``: trapezoid ∫P dt over the concentric phase (so power_w = work_con_j /
   con_duration_s); ``work_ecc_j``: ∫P dt over the eccentric phase (negative: the lifter absorbs
   the drop). P = 0 inside a lockout window (v = 0 there).
-- ``peak_power_w``: max over the concentric phase of P smoothed by a 25 ms centred moving
-  average; ``peak_velocity_ms``: max ‖v‖ over the concentric phase.
+- ``peak_power_w``: max over the finite concentric samples of P smoothed by a 25 ms centred
+  moving average of finite samples (a gap just outside the rep does not poison it; NaN if the
+  concentric phase holds no finite P); ``peak_velocity_ms``: max ‖v‖ over the concentric phase.
 - ``apex_m``: max position z over [i_low, i_top_end] above the low (as ``classify``).
 - ``con_duration_s`` = t[i_top] − t[i_low]; ``cycle_s`` = t[i_end] − t[i_low].
 - ``flags``: "gap" if any sample in [i_low, i_end] is invalid or has a non-finite velocity
@@ -26,7 +29,8 @@ A set is a run of non-rest anchors between rests (``segment_sets``): from the sa
 rest before it (the bell leaving the floor) to the sample before the rest after it (back on the
 floor); without a rest on that side, the run's first / last anchor bounds it. ``build_sets``
 assembles classified ``Rep`` objects into ``SetResult`` (``Rep.path`` is left None; paths are
-added later). Stdlib + numpy only.
+added later), dropping sets without reps (their time goes to the next set's rest). Stdlib +
+numpy only.
 """
 from __future__ import annotations
 
@@ -72,7 +76,7 @@ class SetResult:
     i_end: int
     t_start: float
     t_end: float
-    rest_before_s: float  # duration of the rest window before the set, 0 if none
+    rest_before_s: float  # rest window(s) + dropped empty sets before the set, 0 if none
 
 
 def segment_reps(anchors: list[Anchor], n_samples: int) -> list[tuple[int, int, int, int]]:
@@ -115,12 +119,16 @@ def segment_sets(anchors: list[Anchor]) -> list[tuple[int, int]]:
 
 def moving_average(x: np.ndarray, k: int) -> np.ndarray:
     """Centred moving average over `k` samples (window [i − k//2, i + k − k//2)), truncated at
-    the array ends; NaN only in the windows that hold a NaN."""
+    the array ends, of the finite samples only (sum of finite / count of finite): NaN where a
+    window holds no finite sample."""
     x = np.asarray(x, dtype=float)
     k = max(1, int(k))
     idx = np.arange(len(x)) + k - 1 - k // 2  # full-convolution index of each window's end
     kernel = np.ones(k)
-    return np.convolve(x, kernel)[idx] / np.convolve(np.ones(len(x)), kernel)[idx]
+    finite = np.isfinite(x)
+    sums = np.convolve(np.where(finite, x, 0.0), kernel)[idx]
+    counts = np.convolve(finite.astype(float), kernel)[idx]
+    return np.divide(sums, counts, out=np.full(len(x), np.nan), where=counts > 0.5)
 
 
 def _work(P: np.ndarray, t: np.ndarray, i0: int, i1: int) -> float:
@@ -140,6 +148,7 @@ def rep_metrics(seg: tuple[int, int, int, int], t: np.ndarray, v: np.ndarray, po
     k = max(1, round(PEAK_SMOOTH_S * fs))
     s0, s1 = max(0, i_low - k), min(len(P), i_top + k + 1)  # padded: full windows at the ends
     smooth = moving_average(P[s0:s1], k)[i_low - s0:i_top - s0 + 1]
+    smooth = smooth[np.isfinite(P[i_low:i_top + 1]) & np.isfinite(smooth)]  # in-rep samples
     span = slice(i_low, i_end + 1)
     flags = set()
     if not (np.all(valid[span]) and np.all(np.isfinite(v[span]))):
@@ -149,7 +158,7 @@ def rep_metrics(seg: tuple[int, int, int, int], t: np.ndarray, v: np.ndarray, po
     z = np.asarray(pos, dtype=float)[:, 2]
     return {
         "power_w": concentric_power(P, t, i_low, i_top),
-        "peak_power_w": float(np.max(smooth)),
+        "peak_power_w": float(np.max(smooth)) if len(smooth) else float("nan"),
         "peak_velocity_ms": float(np.max(np.linalg.norm(v[i_low:i_top + 1], axis=1))),
         "work_con_j": _work(P, t, i_low, i_top),
         "work_ecc_j": _work(P, t, i_top_end, i_end),
@@ -165,7 +174,10 @@ def build_sets(anchors: list[Anchor], imu: ImuData, quats: np.ndarray, calib: Ca
                cfg: ClassifierConfig = ClassifierConfig()) -> list[SetResult]:
     """Segment, measure (``rep_metrics``), describe (``rep_features``) and classify every rep,
     grouped into sets; a rep belongs to the set whose span holds its low. Reps whose confidence
-    is below ``cfg.low_conf`` get the flag "low_conf"."""
+    is below ``cfg.low_conf`` get the flag "low_conf". A set without reps (bell picked up and
+    put down) is dropped and its time merged into the next set's ``rest_before_s``, which runs
+    from the start of the rest before (the earliest one, after dropped sets) to the set's
+    first sample."""
     t = imu.t
     reps = []
     for seg in segment_reps(anchors, len(t)):
@@ -178,9 +190,15 @@ def build_sets(anchors: list[Anchor], imu: ImuData, quats: np.ndarray, calib: Ca
         reps.append(Rep(*seg, kind=kind, hand=hand, confidence=conf, features=feats,
                         flags=flags, **m))
     sets = []
+    since = None  # start of the stretch without a kept set: rests and dropped (empty) sets
     for before, run, after in _set_runs(anchors):
         i0, i1 = _bounds(before, run, after)
-        rest = float(t[before.i1] - t[before.i0]) if before else 0.0
-        sets.append(SetResult([r for r in reps if i0 <= r.i_low <= i1], i0, i1,
-                              float(t[i0]), float(t[i1]), rest))
+        if since is None:
+            since = before.i0 if before else i0
+        in_set = [r for r in reps if i0 <= r.i_low <= i1]
+        if not in_set:
+            continue  # no rep (e.g. picked up and put down): its time counts as rest
+        sets.append(SetResult(in_set, i0, i1, float(t[i0]), float(t[i1]),
+                              float(t[i0] - t[since])))
+        since = None
     return sets
