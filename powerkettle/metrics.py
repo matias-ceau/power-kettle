@@ -14,8 +14,9 @@ Conventions
 - ``reps_by_kind_hand`` counts every rep, gap reps included (they happened), keyed
   "kind:hand" (e.g. "snatch:L", "swing:-", "other:-").
 - ``work_j`` = Σ ``work_con_j`` over non-gap reps with a finite value (any kind).
-- ``qualifying`` = non-gap reps (any kind) whose finite ``power_w`` ≥ ``power_floor_w``; with no
-  floor, all non-gap reps. In a session it is summed over all sets.
+- ``qualifying`` = non-gap snatch / swing reps (never "other": failed or partial reps do not
+  count toward a rep target) whose finite ``power_w`` ≥ ``power_floor_w``; with no floor, all
+  non-gap snatch / swing reps. In a session it is summed over all sets.
 - Set ``pace_rpm`` = number of reps (all, incl. gap) / set duration in minutes; None for 0 reps
   or a non-positive duration.
 - Session: ``active_s`` = Σ (t_end − t_start) over sets; ``rest_s`` = duration_s − active_s;
@@ -118,7 +119,7 @@ def _work(reps: Sequence[Rep]) -> float:
 
 
 def _qualifying(reps: Sequence[Rep], power_floor_w: float | None) -> int:
-    ok = [r for r in reps if "gap" not in r.flags]
+    ok = [r for r in reps if r.kind in POWER_KINDS and "gap" not in r.flags]
     if power_floor_w is None:
         return len(ok)
     return sum(1 for r in ok if math.isfinite(r.power_w) and r.power_w >= power_floor_w)

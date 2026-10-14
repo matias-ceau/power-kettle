@@ -105,7 +105,7 @@ def test_set_metrics_excludes_gap_nonfinite_and_other_from_power_stats():
     assert m.pace_rpm == pytest.approx(6.0)
     # work over non-gap reps only: 400 (300) + 50 (nan power) + 400 (other) + 400 + 400
     assert m.work_j == pytest.approx(1650.0)
-    assert m.qualifying == 3  # 300, 500 (other, non-gap), 260; nan never qualifies
+    assert m.qualifying == 2  # 300, 260; the 500 W "other" rep and the nan rep never qualify
     assert not math.isnan(m.work_j)
 
 
@@ -154,3 +154,10 @@ def test_session_floor_only_affects_qualifying():
     assert s.qualifying == 6
     assert session_metrics([set_of_snatches(REF)], 10.0).qualifying == 6
     assert isinstance(s, SessionMetrics)
+
+
+def test_other_reps_never_qualify():
+    s = make_set([make_rep(300), make_rep(900, kind="other", hand="-")])
+    assert set_metrics(s, power_floor_w=250).qualifying == 1
+    assert set_metrics(s).qualifying == 1
+    assert session_metrics([s], 10.0, power_floor_w=250).qualifying == 1
