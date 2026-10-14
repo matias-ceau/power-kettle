@@ -6,6 +6,7 @@
 #include "proto.h"
 #include "ring_buffer.h"
 #include "segments.h"
+#include "fifo_loss.h"
 
 using namespace pk;
 
@@ -224,6 +225,21 @@ void test_segments_contiguous_and_gaps() {
   TEST_ASSERT_EQUAL_UINT32(1, sg.front_count());
 }
 
+void test_estimate_lost_frames() {
+  // 400 Hz for 250 ms = 100 frames produced; 85 read -> 15 lost
+  TEST_ASSERT_EQUAL_UINT32(15, estimate_lost_frames(1000000, 1250000, 400, 85));
+  // rounding to the nearest frame: 251.2 ms -> 100.48 -> 100
+  TEST_ASSERT_EQUAL_UINT32(15, estimate_lost_frames(0, 251200, 400, 85));
+  // 251.3 ms -> 100.52 -> 101
+  TEST_ASSERT_EQUAL_UINT32(16, estimate_lost_frames(0, 251300, 400, 85));
+  // loss was reported, so at least one frame is assumed missing
+  TEST_ASSERT_EQUAL_UINT32(1, estimate_lost_frames(0, 212500, 400, 85));
+  TEST_ASSERT_EQUAL_UINT32(1, estimate_lost_frames(0, 100000, 400, 85));  // more read than expected
+  TEST_ASSERT_EQUAL_UINT32(1, estimate_lost_frames(500, 400, 400, 0));    // time went backwards
+  // nothing read at all (e.g. I2C error + flush): every expected frame is lost
+  TEST_ASSERT_EQUAL_UINT32(80, estimate_lost_frames(0, 100000, 800, 0));
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_encode_imu_golden);
@@ -238,5 +254,6 @@ int main(int, char**) {
   RUN_TEST(test_ring_buffer_wraparound_and_clear);
   RUN_TEST(test_ring_buffer_peek_then_drop);
   RUN_TEST(test_segments_contiguous_and_gaps);
+  RUN_TEST(test_estimate_lost_frames);
   return UNITY_END();
 }

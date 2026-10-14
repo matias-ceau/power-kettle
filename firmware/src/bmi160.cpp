@@ -141,22 +141,28 @@ bool Bmi160::configure(uint16_t odr_hz, uint8_t acc_g, uint16_t gyro_dps) {
   if (!odr_code(odr_hz, &odr) || !acc_range_code(acc_g, &acc) || !gyr_range_code(gyro_dps, &gyr)) {
     return false;
   }
+  // Clear any stale err_code (ERR_REG is cleared on read), then switch the
+  // FIFO off while the ODRs change: with the headerless FIFO enabled, the
+  // moment between the ACC_CONF and GYR_CONF writes is an ODR mismatch and
+  // would raise err_code 0b0110.
+  uint8_t err = 0;
+  bool ok = read_regs(reg::kErr, &err, 1);
+  ok = ok && write_reg(reg::kFifoConfig1, 0x00);
   // ACC_CONF: acc_us = 0, acc_bwp = 0b010 (normal filter), acc_odr.
-  bool ok = write_reg(reg::kAccConf, static_cast<uint8_t>((0b010 << 4) | odr));
+  ok = ok && write_reg(reg::kAccConf, static_cast<uint8_t>((0b010 << 4) | odr));
   ok = ok && write_reg(reg::kAccRange, acc);
   // GYR_CONF: gyr_bwp = 0b10 (normal filter), gyr_odr.
   ok = ok && write_reg(reg::kGyrConf, static_cast<uint8_t>((0b10 << 4) | odr));
   ok = ok && write_reg(reg::kGyrRange, gyr);
   // Watermark in 4-byte units: 20 frames x 12 bytes / 4 = 60.
   ok = ok && write_reg(reg::kFifoConfig0, kFifoWatermarkFrames * kFrameBytes / 4);
-  // FIFO_CONFIG_1: fifo_gyr_en | fifo_acc_en, header disabled. In headerless
-  // mode each frame is gyro x,y,z then accel x,y,z.
+  // FIFO_CONFIG_1 last: fifo_gyr_en | fifo_acc_en, header disabled. In
+  // headerless mode each frame is gyro x,y,z then accel x,y,z.
   ok = ok && write_reg(reg::kFifoConfig1, 0xC0);
   if (!ok) return false;
 
   // err_code (e.g. 0b0110: headerless FIFO with mismatched sensor ODRs, or an
   // invalid ACC_CONF/GYR_CONF combination) makes the config unusable.
-  uint8_t err = 0;
   if (!read_regs(reg::kErr, &err, 1)) return false;
   if ((err >> 1) & 0x0F) {
     Serial.printf("[bmi160] ERR_REG 0x%02X after configure\n", err);
@@ -171,10 +177,9 @@ void Bmi160::flush_fifo() { write_reg(reg::kCmd, cmd::kFifoFlush); }
 size_t Bmi160::read_frames(pk::Sample* out, size_t max) {
   uint8_t lenbuf[2];
   last_read_lost_data_ = false;
-  if (!read_regs(reg::kFifoLength, lenbuf, 2)) {
-    last_read_lost_data_ = true;
-    return 0;
-  }
+  // A failed length read consumed nothing from the FIFO: nothing is lost,
+  // the next read picks the frames up.
+  if (!read_regs(reg::kFifoLength, lenbuf, 2)) return 0;
   last_read_time_us_ = static_cast<uint64_t>(esp_timer_get_time());
   uint16_t fifo_bytes = static_cast<uint16_t>(lenbuf[0] | ((lenbuf[1] & 0x07) << 8));
   if (fifo_bytes >= kFifoOverflowBytes) last_read_lost_data_ = true;
@@ -189,10 +194,14 @@ size_t Bmi160::read_frames(pk::Sample* out, size_t max) {
     if (n > kChunkFrames) n = kChunkFrames;
     if (!read_regs(reg::kFifoData, buf, n * kFrameBytes)) {
       // A failed burst may have consumed part of a frame and left the FIFO
-      // misaligned; flush to resynchronise and report the loss.
+      // misaligned: flush to resynchronise. Everything produced up to the
+      // flush is discarded, including frames already read in this call, so
+      // the whole gap lies before the next frame read and the caller can
+      // size it from the elapsed time (last_read_time_us = flush time).
       flush_fifo();
+      last_read_time_us_ = static_cast<uint64_t>(esp_timer_get_time());
       last_read_lost_data_ = true;
-      break;
+      return 0;
     }
     for (size_t i = 0; i < n; ++i) {
       const uint8_t* f = buf + i * kFrameBytes;  // gx gy gz ax ay az

@@ -36,10 +36,13 @@ class Bmi160 {
 
   // esp_timer time at which the FIFO length was sampled by the last
   // read_frames() call; the last frame read was produced at or before it.
+  // After an I2C error it is the time of the resynchronising flush.
   uint64_t last_read_time_us() const { return last_read_time_us_; }
 
   // True if the last read_frames() call saw a nearly full FIFO (>= 1000
-  // bytes) or hit an I2C error, i.e. samples may have been lost.
+  // bytes; stream mode discards the oldest frames on overflow) or hit an I2C
+  // error mid-burst (FIFO flushed, 0 frames returned): frames may have been
+  // lost before the ones returned.
   bool last_read_lost_data() const { return last_read_lost_data_; }
 
  private:

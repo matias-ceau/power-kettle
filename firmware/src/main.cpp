@@ -1,6 +1,7 @@
 // Power Kettle firmware: BMI160 FIFO -> ring buffer -> BLE notifications.
 #include <Arduino.h>
 #include <Wire.h>
+#include <esp_timer.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/queue.h>
 
@@ -8,6 +9,7 @@
 #include "bmi160.h"
 #include "board.h"
 #include "config.h"
+#include "fifo_loss.h"
 #include "proto.h"
 #include "ring_buffer.h"
 #include "segments.h"
@@ -37,6 +39,7 @@ uint32_t sample_index = 0;  // index of the next sample to be produced
 uint32_t dropped = 0;
 uint64_t time_us = 0;  // esp_timer time of the read that produced sample_index-1
 bool overflow_pending = false;
+uint64_t prev_read_us = 0;  // FIFO snapshot time of the previous read (or start flush)
 
 uint32_t last_poll_ms = 0;
 uint32_t last_send_ms = 0;
@@ -64,6 +67,7 @@ void start_stream() {
     return;
   }
   imu.flush_fifo();
+  prev_read_us = static_cast<uint64_t>(esp_timer_get_time());
   ring.clear();
   segments.clear();
   seq = 0;
@@ -120,7 +124,20 @@ void process_commands() {
 void read_imu() {
   static pk::Sample frames[Bmi160::kMaxFifoFrames + 1];
   size_t n = imu.read_frames(frames, Bmi160::kMaxFifoFrames + 1);
-  if (imu.last_read_lost_data()) overflow_pending = true;
+  uint64_t t_read = imu.last_read_time_us();
+  uint32_t lost = 0;
+  if (imu.last_read_lost_data()) {
+    // Frames lost inside the BMI160 (overflow discards the oldest; an I2C
+    // error flushes everything) precede the frames just read. Skip their
+    // indices so the gap is explicit in first_index and index <-> time_us
+    // stays aligned for the rest of the run.
+    lost = pk::estimate_lost_frames(prev_read_us, t_read, odr_hz, n);
+    sample_index += lost;
+    dropped += lost;
+    overflow_pending = true;
+    Serial.printf("[imu] FIFO loss: ~%u frames skipped\n", static_cast<unsigned>(lost));
+  }
+  prev_read_us = t_read;
   for (size_t i = 0; i < n; ++i) {
     uint32_t idx = sample_index + static_cast<uint32_t>(i);
     if (segments.can_append(idx) && ring.push(frames[i])) {
@@ -130,10 +147,8 @@ void read_imu() {
       overflow_pending = true;
     }
   }
-  if (n > 0) {
-    sample_index += static_cast<uint32_t>(n);
-    time_us = imu.last_read_time_us();
-  }
+  sample_index += static_cast<uint32_t>(n);
+  if (n > 0 || lost > 0) time_us = t_read;
 }
 
 void send_packets(uint32_t now) {
