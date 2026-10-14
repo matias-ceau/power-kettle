@@ -26,7 +26,7 @@ def athlete_forward(v: np.ndarray, set_slice: slice, hint_w: np.ndarray) -> np.n
     """Unit horizontal forward (z = 0) of a set: first principal axis (uncentred, so a back and
     forth swing is one axis) of the horizontal velocity (x, y) over the finite moving samples of
     `v[set_slice]`, signed to have a positive dot with `hint_w`. With fewer than
-    ``MIN_MOVING_SAMPLES`` such samples, or no dominant axis, the horizontal part of `hint_w`."""
+    ``MIN_MOVING_SAMPLES`` such samples, the horizontal part of `hint_w`."""
     hint = _horizontal_unit(np.asarray(hint_w, dtype=float))
     vh = np.asarray(v, dtype=float)[set_slice, :2]
     vh = vh[np.all(np.isfinite(vh), axis=1)]
@@ -44,7 +44,8 @@ def rep_path(pos: np.ndarray, seg: tuple[int, int, int, int], forward_w: np.ndar
     """(k, 3) path of the rep `seg` = (i_low, i_top, i_top_end, i_end) in the athlete frame: the
     position relative to its value at ``i_low``, over [i_low, i_end], rotated so x = forward,
     y = left (ẑ × forward), z = up, and decimated from `fs` to `decimate_to_hz` by stride
-    ``round(fs / decimate_to_hz)``. NaN rows stay NaN."""
+    ``round(fs / decimate_to_hz)``. NaN rows stay NaN; a NaN at ``pos[i_low]`` (the origin) makes
+    the whole path NaN, and the decimated path may omit the sample ``i_end`` itself."""
     i_low, i_end = int(seg[0]), int(seg[3])
     pos = np.asarray(pos, dtype=float)
     rel = pos[i_low:i_end + 1] - pos[i_low]

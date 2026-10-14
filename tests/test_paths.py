@@ -95,15 +95,41 @@ def test_path_keeps_nan_rows():
     assert np.all(np.isnan(path[10:15])) and np.all(np.isfinite(path[:10]))
 
 
-def test_forward_from_velocity_sign_follows_hint():
-    ang = np.radians(30.0)
-    d = np.array([np.cos(ang), np.sin(ang), 0.0])
+def unit(deg):
+    return np.array([np.cos(np.radians(deg)), np.sin(np.radians(deg)), 0.0])
+
+
+@pytest.mark.parametrize("offset_deg, sign", [(30, 1), (-30, 1), (80, 1), (-80, 1),
+                                              (100, -1), (-100, -1), (170, -1), (-170, -1)])
+def test_forward_sign_follows_hint_off_axis(offset_deg, sign):
+    """The hint is off the true axis, so a hint-only implementation would fail."""
+    d = unit(30.0)
     s = np.sin(np.linspace(0, 20, 400))
     v = np.outer(s, d) + np.array([0.0, 0.0, 1.0]) * s[:, None]
-    f = athlete_forward(v, slice(0, 400), d)
+    hint = unit(30.0 + offset_deg)
+    f = athlete_forward(v, slice(0, 400), hint)
+    assert np.allclose(f, sign * d, atol=1e-6)
+    assert np.linalg.norm(f - hint) > 0.1  # not just the hint echoed back
+
+
+def test_forward_fallback_boundary_49_vs_50_moving_samples():
+    hint = unit(90.0)
+    v = np.zeros((400, 3))
+    v[:49, 0] = 1.0
+    assert np.allclose(athlete_forward(v, slice(0, 400), hint), hint)  # 49: hint
+    v[49, 0] = 1.0
+    assert np.allclose(athlete_forward(v, slice(0, 400), hint), [1.0, 0.0, 0.0])  # 50: PCA
+
+
+def test_forward_ignores_nan_rows_with_enough_valid_samples():
+    d = unit(-20.0)
+    v = np.outer(np.where(np.arange(100) % 2 == 0, 1.0, -1.0) * 0.8, d)
+    v[np.arange(100) % 5 == 0] = np.nan  # 20 NaN rows, 80 valid
+    hint = unit(60.0)
+    f = athlete_forward(v, slice(0, 100), hint)
     assert np.allclose(f, d, atol=1e-6)
-    f = athlete_forward(v, slice(0, 400), -d)
-    assert np.allclose(f, -d, atol=1e-6)
+    v[np.arange(100) % 5 != 0] = np.nan  # leaves 20 finite rows: fallback
+    assert np.allclose(athlete_forward(v, slice(0, 100), hint), hint)
 
 
 def test_forward_falls_back_to_hint():
