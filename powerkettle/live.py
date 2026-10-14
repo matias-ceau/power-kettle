@@ -77,6 +77,10 @@ The rep is then measured as in ``reps.build_sets`` with that top added to the wi
 Known differences from the batch result
 ---------------------------------------
 - A rep's ``flags`` cover [low, end of the top so far]; the batch rep spans to the next low.
+- After a gap too long to bridge, a rep whose orientation is still suspect waits while more
+  anchors may correct the tilt (``pipeline.motion_stages``): typically until the next low
+  (~0.6 s later than usual); the correction uses the anchors known by then, the batch all
+  of them up to the next static window.
 - A top with no following backswing (bell put down from the top) is a live rep, not a batch one.
 - The lockout window may still grow after the rep is sent (``top_static_s``, ``top_tilt_deg``
   and the path cover the part known then); the path's forward comes from the set's data so far.
@@ -142,6 +146,7 @@ class _Carry:
     bias: np.ndarray  # (3,) working gyro bias, rad/s
     forward: np.ndarray  # (3,) rest-based (fallback) forward in force
     motion: StretchMotion | None  # sums over the stretch before the checkpoint (None: it starts)
+    suspect: bool  # orientation suspect there (after a gap it could not correct)
 
 
 class LiveAnalyser:
@@ -307,12 +312,12 @@ class LiveAnalyser:
         w0, n = self._w0, self._n
         imu = self._imu(w0, n)
         if self._carry is None:
-            calib, fwd0, motion0 = self._calib, None, None
+            calib, fwd0, motion0, suspect0 = self._calib, None, None, False
         else:
             calib = dataclasses.replace(self._calib, q0=self._carry.q,
                                         gyro_bias=self._carry.bias, still=slice(0, 1))
-            fwd0, motion0 = self._carry.forward, self._carry.motion
-        m = motion_stages(imu, calib, self.bell, self.cfg, fwd0, motion0)
+            fwd0, motion0, suspect0 = self._carry.forward, self._carry.motion, self._carry.suspect
+        m = motion_stages(imu, calib, self.bell, self.cfg, fwd0, motion0, suspect0)
 
         def stretch_at(i: int):  # local row -> its stretch (in a rest: the stretch after it)
             return next((st for st in m.stretches if i < st.s1), m.stretches[-1])
@@ -348,12 +353,14 @@ class LiveAnalyser:
             nxt = next((a for a in anchors if a.i0 > self._low), None)
             if nxt is None:
                 found = win.live_top(self._low - win.w0, self.cfg)
-                if found is None:
+                if found is None or win.correction_pending(self._low - win.w0):
                     break
                 top, arrays = found
                 events += self._emit_rep(win, Anchor(top.i0 + win.w0, top.i1 + win.w0, top.kind),
                                          arrays)
             elif nxt.kind in _TOPS:
+                if win.correction_pending(self._low - win.w0):
+                    break
                 events += self._emit_rep(win, nxt, (win.m.v, win.m.pos, win.m.P))
             else:  # a rest (the final backswing's set-down) or a low: no rep from this low
                 self._low = None
@@ -370,11 +377,11 @@ class LiveAnalyser:
         v, pos, P = arrays
         w0, imu = win.w0, win.imu
         seg = (self._low - w0, top.i0 - w0, top.i1 - w0, top.i1 - w0)
-        met = rep_metrics(seg, imu.t, v, pos, P, imu.valid, imu.saturated)
+        met = rep_metrics(seg, imu.t, v, pos, P, imu.valid, imu.saturated, win.m.suspect)
         feats = rep_features(seg, win.m.q, win.calib, pos, imu.t)
         kind, hand, conf = classify(feats, self.cfg.classifier)
         flags = met.pop("flags")
-        if conf < self.cfg.classifier.low_conf:
+        if conf < self.cfg.classifier.low_conf or "orientation" in flags:
             flags.add("low_conf")
         met.update(work_ecc_j=math.nan, cycle_s=math.nan)  # need the next low
         rep = Rep(self._low, top.i0, top.i1, -1, kind=kind, hand=hand, confidence=conf,
@@ -427,7 +434,8 @@ class LiveAnalyser:
                                      win.imu.valid[sl], prior)
                 motion.sign_ref = st.motion.sign_ref  # decided on the window's data
             self._carry = _Carry(win.m.q[target].copy(), win.m.bias[target].copy(),
-                                 np.array(st.hint, dtype=float), motion)
+                                 np.array(st.hint, dtype=float), motion,
+                                 bool(win.m.suspect[target]))
             self._w0 = w0 + target
 
     def _clean(self, w0: int) -> np.ndarray:
@@ -453,6 +461,12 @@ class _Window:
     m: Motion
     forward_at: Callable[[int], np.ndarray]  # local row -> its stretch's forward (θ plane)
     mass_kg: float
+
+    def correction_pending(self, low: int) -> bool:
+        """The orientation from local row `low` on is suspect (after an unbridged gap) and the
+        region is still open (no static window yet): more anchors may yet correct it
+        (``pipeline.motion_stages``), so the rep waits."""
+        return bool(self.m.suspect_open and np.any(self.m.suspect[low:]))
 
     def with_top(self, low: int, top: Anchor) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         """(v, pos, P) with `top` added after the low at local row `low` (also added, should

@@ -21,7 +21,9 @@ Metrics (``rep_metrics``)
 - ``apex_m``: max position z over [i_low, i_top_end] above the low (as ``classify``).
 - ``con_duration_s`` = t[i_top] − t[i_low]; ``cycle_s`` = t[i_end] − t[i_low].
 - ``flags``: "gap" if any sample in [i_low, i_end] is invalid or has a non-finite velocity
-  (metrics there are NaN or unreliable), "saturated" if any is saturated.
+  (metrics there are NaN or unreliable), "saturated" if any is saturated, "orientation" if any
+  is orientation-suspect (after a gap the orientation could not bridge or correct: kind,
+  apex and path unreliable; the rep also gets "low_conf"; metrics count it like low_conf).
 
 Sets
 ----
@@ -137,9 +139,11 @@ def _work(P: np.ndarray, t: np.ndarray, i0: int, i1: int) -> float:
 
 
 def rep_metrics(seg: tuple[int, int, int, int], t: np.ndarray, v: np.ndarray, pos: np.ndarray,
-                P: np.ndarray, valid: np.ndarray, saturated: np.ndarray) -> dict:
+                P: np.ndarray, valid: np.ndarray, saturated: np.ndarray,
+                suspect: np.ndarray | None = None) -> dict:
     """Numeric ``Rep`` fields and ``flags`` of the rep `seg` (see the module docstring), from
-    the ``integrate`` arrays `v`, `pos`, `P` and the ``ImuData`` masks `valid`, `saturated`."""
+    the ``integrate`` arrays `v`, `pos`, `P`, the ``ImuData`` masks `valid`, `saturated` and
+    the orientation-suspect mask `suspect` (optional)."""
     i_low, i_top, i_top_end, i_end = (int(i) for i in seg)
     t = np.asarray(t, dtype=float)
     v = np.asarray(v, dtype=float)
@@ -155,6 +159,8 @@ def rep_metrics(seg: tuple[int, int, int, int], t: np.ndarray, v: np.ndarray, po
         flags.add("gap")
     if np.any(saturated[span]):
         flags.add("saturated")
+    if suspect is not None and np.any(suspect[span]):
+        flags.add("orientation")
     z = np.asarray(pos, dtype=float)[:, 2]
     return {
         "power_w": concentric_power(P, t, i_low, i_top),
@@ -171,21 +177,23 @@ def rep_metrics(seg: tuple[int, int, int, int], t: np.ndarray, v: np.ndarray, po
 
 def build_sets(anchors: list[Anchor], imu: ImuData, quats: np.ndarray, calib: Calibration,
                v: np.ndarray, pos: np.ndarray, P: np.ndarray,
-               cfg: ClassifierConfig = ClassifierConfig()) -> list[SetResult]:
+               cfg: ClassifierConfig = ClassifierConfig(),
+               suspect: np.ndarray | None = None) -> list[SetResult]:
     """Segment, measure (``rep_metrics``), describe (``rep_features``) and classify every rep,
     grouped into sets; a rep belongs to the set whose span holds its low. Reps whose confidence
     is below ``cfg.low_conf`` get the flag "low_conf". A set without reps (bell picked up and
     put down) is dropped and its time merged into the next set's ``rest_before_s``, which runs
     from the start of the rest before (the earliest one, after dropped sets) to the set's
-    first sample."""
+    first sample. `suspect` (``pipeline.Motion.suspect``): reps over a suspect sample get the
+    flags "orientation" and "low_conf"."""
     t = imu.t
     reps = []
     for seg in segment_reps(anchors, len(t)):
-        m = rep_metrics(seg, t, v, pos, P, imu.valid, imu.saturated)
+        m = rep_metrics(seg, t, v, pos, P, imu.valid, imu.saturated, suspect)
         feats = rep_features(seg, quats, calib, pos, t)
         kind, hand, conf = classify(feats, cfg)
         flags = m.pop("flags")
-        if conf < cfg.low_conf:
+        if conf < cfg.low_conf or "orientation" in flags:
             flags.add("low_conf")
         reps.append(Rep(*seg, kind=kind, hand=hand, confidence=conf, features=feats,
                         flags=flags, **m))

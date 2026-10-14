@@ -41,6 +41,7 @@ from .anchors import (
     refine_rests,
     set_forwards,
 )
+from . import quat
 from .bell import BellProfile
 from .calibration import (
     Calibration,
@@ -52,11 +53,11 @@ from .calibration import (
     with_mounting,
 )
 from .classify import ClassifierConfig
-from .imu import ImuData, scale_run
-from .integrate import power, segment_position, segment_velocity
+from .imu import G, ImuData, scale_run
+from .integrate import anchored_mean_acceleration, power, segment_position, segment_velocity
 from .kinematics import Kinematics, com_acceleration
 from .metrics import SessionMetrics, SetMetrics, session_metrics, set_metrics
-from .orientation import estimate_orientation, static_mask
+from .orientation import estimate_orientation, gap_regions, static_mask
 from .paths import athlete_forward, rep_path
 from .rawlog import Run
 from .reps import Rep, SetResult, build_sets, segment_sets
@@ -67,6 +68,10 @@ SNATCH_HANDS = ("L", "R", "?")  # a snatch's hand; swing and other always have "
 WARN_NOMINAL_RATE = "sample rate nominal (no status data)"
 WARN_CARRIED_CALIBRATION = "calibration carried over from previous run"
 PRE_CALIBRATION_WARN_S = 1.0  # more data than this before the calibration window: warning
+GAP_TILT_MIN_S = 0.5  # anchored segment time needed to estimate the tilt error after a gap
+GAP_TILT_MAX_ITER = 3  # tilt corrections after a gap, each on the anchors of the previous
+GAP_TILT_STEP_DEG = 0.2  # a correction smaller than this ends the iteration
+GAP_TILT_RESIDUAL_DEG = 2.0  # tilt error still estimated after the corrections: failed
 
 
 def pre_calibration_warning(calib: Calibration, fs: float) -> list[str]:
@@ -184,15 +189,14 @@ class Motion:
     v: np.ndarray  # (N, 3) m/s
     pos: np.ndarray  # (N, 3) m
     P: np.ndarray  # (N,) W
+    suspect: np.ndarray  # (N,) bool: orientation after an unbridged gap, not corrected
+    suspect_open: bool = False  # a suspect gap region reaches the last sample (more data may
+    #                             still correct it)
 
 
-def motion_stages(imu: ImuData, calib: Calibration, bell: BellProfile, cfg: AnalysisConfig,
-                  forward0: np.ndarray | None = None,
-                  motion0: StretchMotion | None = None) -> Motion:
-    """Orientation, COM acceleration, anchors, velocity / position, ``refine_rests``, velocity /
-    position again on the refined anchors, and power (the chain of ``analyse_run``; `forward0`
-    and `motion0` as in ``detect_anchors_and_forwards``)."""
-    q, bias = estimate_orientation(imu, calib, return_bias=True)
+def _stages(imu: ImuData, calib: Calibration, bell: BellProfile, cfg: AnalysisConfig,
+            forward0, motion0, resets) -> Motion:
+    q, bias = estimate_orientation(imu, calib, return_bias=True, resets=resets)
     kin = com_acceleration(imu, q, calib, bias)
     raw, stretches = detect_anchors_and_forwards(imu, q, kin, calib, cfg.anchors, forward0,
                                                  motion0)
@@ -202,7 +206,62 @@ def motion_stages(imu: ImuData, calib: Calibration, bell: BellProfile, cfg: Anal
     v = segment_velocity(kin.a_com, imu.t, anchors)
     pos = segment_position(v, imu.t, anchors)
     return Motion(q, bias, kin, raw, stretches, anchors, v, pos,
-                  power(kin.a_com, v, bell.mass_kg))
+                  power(kin.a_com, v, bell.mass_kg), np.zeros(len(imu.t), dtype=bool))
+
+
+def _tilt_correction(m: Motion, imu: ImuData, lo: int, hi: int) -> tuple[np.ndarray, float]:
+    """(world rotation undoing the tilt error over samples [lo, hi), its angle in degrees) from
+    the mean a_com over the anchored segments from lo to hi (the first levelled sample: a
+    lockout starting there ends a segment); (identity, NaN) without enough of them."""
+    mean, dur = anchored_mean_acceleration(m.kin.a_com, imu.t, m.anchors, lo,
+                                           min(hi, len(imu.t) - 1))
+    if dur < GAP_TILT_MIN_S:
+        return np.array([1.0, 0.0, 0.0, 0.0]), math.nan
+    ez = np.array([0.0, 0.0, 1.0]) + mean / G  # E ẑ (unnormalised)
+    return (quat.from_two_vectors(ez, [0.0, 0.0, 1.0]),
+            math.degrees(quat.angle_between(ez, [0.0, 0.0, 1.0])))
+
+
+def motion_stages(imu: ImuData, calib: Calibration, bell: BellProfile, cfg: AnalysisConfig,
+                  forward0: np.ndarray | None = None,
+                  motion0: StretchMotion | None = None, suspect0: bool = False) -> Motion:
+    """Orientation, COM acceleration, anchors, velocity / position, ``refine_rests``, velocity /
+    position again on the refined anchors, and power (the chain of ``analyse_run``; `forward0`
+    and `motion0` as in ``detect_anchors_and_forwards``).
+
+    Unbridged gaps (``orientation.gap_regions``): the rotation during the gap is lost, so the
+    orientation after it carries a constant world-frame error E until the next static window
+    levels it. Power is unaffected (a_com + gẑ and the detrended v both turn by E), but heights
+    and tilts are not, and later reps lose their kind. The tilt part of E is read from the mean
+    a_com over the anchored segments of the region (``anchored_mean_acceleration``): if they
+    last at least GAP_TILT_MIN_S, the orientation is restarted at the region's first sample
+    with that tilt undone and the chain re-run, up to GAP_TILT_MAX_ITER times (the anchors
+    improve with the tilt). If no estimate is possible, or GAP_TILT_RESIDUAL_DEG remain, the
+    region's samples are marked ``suspect`` (reps over them get the flag "orientation").
+    `suspect0`: the orientation at sample 0 is already suspect (``live``): so are the samples
+    up to the first static one."""
+    m = _stages(imu, calib, bell, cfg, forward0, motion0, None)
+    static = static_mask(imu)
+    regions = gap_regions(imu, min(int(calib.still.start or 0), len(imu.t) - 1), static)
+    resets: dict[int, np.ndarray] = {}
+    for _ in range(GAP_TILT_MAX_ITER if regions else 0):
+        changed = False
+        for restart, lo, hi in regions:
+            c, angle = _tilt_correction(m, imu, lo, hi)
+            if angle >= GAP_TILT_STEP_DEG:  # False for NaN
+                resets[restart] = quat.mul(c, m.q[restart])
+                changed = True
+        if not changed:
+            break
+        m = _stages(imu, calib, bell, cfg, forward0, motion0, resets)
+    for _, lo, hi in regions:
+        if not _tilt_correction(m, imu, lo, hi)[1] < GAP_TILT_RESIDUAL_DEG:  # True for NaN
+            m.suspect[lo:hi] = True
+            m.suspect_open |= hi == len(imu.t)
+    if suspect0:
+        first_static = np.flatnonzero(static)
+        m.suspect[:int(first_static[0]) if len(first_static) else len(imu.t)] = True
+    return m
 
 
 def map_markers(run: Run, markers: list[tuple[float, str]]) -> list[tuple[int, str]]:
@@ -262,7 +321,7 @@ def analyse_run(run: Run, bell: BellProfile = BellProfile(),
     m = motion_stages(imu, calib, bell, cfg)
     q, v, pos, anchors = m.q, m.v, m.pos, m.anchors
 
-    sets = build_sets(anchors, imu, q, calib, v, pos, m.P, cfg.classifier)
+    sets = build_sets(anchors, imu, q, calib, v, pos, m.P, cfg.classifier, m.suspect)
     reps = [r for s in sets for r in s.reps]
     if labels:
         _apply_labels(reps, labels)

@@ -157,10 +157,37 @@ def working_bias(imu: ImuData, bias0: np.ndarray, static: np.ndarray, start: int
     return bias
 
 
+def gap_regions(imu: ImuData, s0: int, static: np.ndarray,
+                gap_interp_max_s: float = GAP_INTERP_MAX_S) -> list[tuple[int, int, int]]:
+    """(restart, lo, hi) per gap that ``estimate_orientation`` cannot bridge (an interior run of
+    invalid samples longer than `gap_interp_max_s`): the samples [lo, hi) are integrated from
+    the orientation held across the gap, at sample `restart`, without static levelling (the
+    rotation during the gap is lost). After the calibration window start `s0`: restart = lo =
+    the first valid sample after the gap, hi = the first `static` sample from there (or the
+    end); before it (integrated backwards): restart = hi − 1 = the last valid sample before the
+    gap, lo = one past the last static sample before it (or 0)."""
+    ok = imu.valid & np.all(np.isfinite(imu.gyro), axis=1)
+    _, bridged = _bridge_gaps(np.nan_to_num(imu.gyro), ok, imu.fs, gap_interp_max_s)
+    n = len(ok)
+    out = []
+    starts, stops = _runs(~bridged)
+    for a, b in zip(starts.tolist(), stops.tolist()):
+        if a == 0 or b == n:
+            continue
+        if a > s0:
+            nxt = np.flatnonzero(static[b:])
+            out.append((b, b, b + int(nxt[0]) if len(nxt) else n))
+        elif b <= s0:
+            prev = np.flatnonzero(static[:a])
+            out.append((a - 1, int(prev[-1]) + 1 if len(prev) else 0, a))
+    return out
+
+
 def estimate_orientation(imu: ImuData, calib: Calibration, gain: float = 2.0,
                          bias_update_min_s: float = 1.0, bias_max_std: float = 0.01,
                          bias_max_jump: float = 0.03, return_bias: bool = False,
-                         gap_interp_max_s: float = GAP_INTERP_MAX_S):
+                         gap_interp_max_s: float = GAP_INTERP_MAX_S,
+                         resets: dict[int, np.ndarray] | None = None):
     """(N, 4) world <- sensor orientation, scalar-first; with `return_bias` also the (N, 3)
     working gyro bias that was subtracted at each sample.
 
@@ -183,7 +210,11 @@ def estimate_orientation(imu: ImuData, calib: Calibration, gain: float = 2.0,
     either side, when those two samples lie at most `gap_interp_max_s` apart (a short BLE gap in mid-swing would otherwise
     leave a tilt error that lasts until the next static window). Across longer gaps, and at
     the start or end of the data, steps touching an invalid sample do not rotate, so those
-    samples hold the last orientation. The samples stay invalid for every other purpose."""
+    samples hold the last orientation. The samples stay invalid for every other purpose.
+
+    `resets` maps a sample index to an orientation that replaces the integrated one there
+    (integration goes on from it, away from the calibration window): the tilt corrected after
+    a gap that could not be bridged (``gap_regions``, ``pipeline.motion_stages``)."""
     n = len(imu.t)
     dt = 1.0 / imu.fs
     s0 = min(max(int(calib.still.start or 0), 0), n - 1)
@@ -202,24 +233,32 @@ def estimate_orientation(imu: ImuData, calib: Calibration, gain: float = 2.0,
     with np.errstate(invalid="ignore", divide="ignore"):
         f_hat = imu.acc / np.linalg.norm(imu.acc, axis=1, keepdims=True)
     rate = min(gain * dt, 1.0)
+    resets = resets or {}
     # forwards: step j lands on sample s0 + 1 + j; backwards: step j lands on s0 - 1 - j
-    q[s0 + 1:] = _integrate(q[s0], dq[s0:], static_all[s0 + 1:], f_hat[s0 + 1:], rate)
+    q[s0 + 1:] = _integrate(q[s0], dq[s0:], static_all[s0 + 1:], f_hat[s0 + 1:], rate,
+                            {i - s0 - 1: r for i, r in resets.items() if i > s0})
     if s0 > 0:
         back = quat.conj(dq[s0 - 1::-1])
-        q[s0 - 1::-1] = _integrate(q[s0], back, static_all[s0 - 1::-1], f_hat[s0 - 1::-1], rate)
+        q[s0 - 1::-1] = _integrate(q[s0], back, static_all[s0 - 1::-1], f_hat[s0 - 1::-1], rate,
+                                   {s0 - 1 - i: r for i, r in resets.items() if i < s0})
     return (q, bias) if return_bias else q
 
 
 def _integrate(q0: np.ndarray, dq: np.ndarray, static: np.ndarray, f_hat: np.ndarray,
-               rate: float) -> np.ndarray:
+               rate: float, resets: dict[int, np.ndarray] | None = None) -> np.ndarray:
     """(m, 4) orientations after each step dq[j] (right-multiplied) from `q0`, levelled towards
-    `f_hat[j]` where `static[j]` (both apply to the sample the step lands on)."""
+    `f_hat[j]` where `static[j]` (both apply to the sample the step lands on); `resets` maps a
+    step to the orientation that replaces its result."""
     out = np.empty((len(dq), 4))
+    resets = resets or {}
     starts, stops = _runs(static)
-    bounds = sorted({0, len(static), *starts.tolist(), *stops.tolist()})
+    bounds = sorted({0, len(static), *starts.tolist(), *stops.tolist(),
+                     *(j for r in resets for j in (r, r + 1) if 0 <= r < len(dq))})
     prev = q0
     for a, b in zip(bounds[:-1], bounds[1:]):
-        if static[a]:
+        if a in resets:  # a one-step stretch (b == a + 1)
+            out[a] = quat.normalize(np.asarray(resets[a], float))
+        elif static[a]:
             out[a:b] = _static_stretch(prev, dq[a:b].tolist(), f_hat[a:b].tolist(), rate)
         else:
             out[a:b] = quat.normalize(quat.mul(prev, _cumulative_product(dq[a:b])))

@@ -116,6 +116,30 @@ def segment_position(v: np.ndarray, t: np.ndarray, anchors: list[Anchor]) -> np.
     return pos
 
 
+def anchored_mean_acceleration(a_com: np.ndarray, t: np.ndarray, anchors: list[Anchor],
+                               lo: int, hi: int) -> tuple[np.ndarray, float]:
+    """(Σ ∫ a_com dt / Σ T, Σ T) over the segments between consecutive anchors (from the
+    zero-velocity end of one to that of the next, as ``segment_velocity``) that lie inside
+    samples [lo, hi] and hold finite a_com only; (NaN, 0) without one.
+
+    A segment starts and ends at zero velocity, so its ∫ a dt is 0: what remains is the
+    constant the detrend removes. After an orientation error E (world frame, constant) the
+    estimate is a_com = E a + (I − E) g_w, so the mean is (I − E) g_w = g (E ẑ − ẑ): the
+    tilt error (``pipeline.motion_stages`` uses it after a gap it could not bridge)."""
+    a_com = np.asarray(a_com, dtype=float)
+    t = np.asarray(t, dtype=float)
+    fs = _fs(t)
+    total, dur = np.zeros(3), 0.0
+    anchors = sorted(anchors)
+    for a, b in zip(anchors[:-1], anchors[1:]):
+        s, e = rest_core(a, fs)[1], rest_core(b, fs)[0]
+        if s < lo or e > hi or e - s < 2 or not np.all(np.isfinite(a_com[s:e + 1])):
+            continue
+        total += _cumtrapz(a_com[s:e + 1], t[s:e + 1])[-1]
+        dur += float(t[e] - t[s])
+    return (total / dur if dur > 0 else np.full(3, np.nan)), dur
+
+
 def power(a_com: np.ndarray, v: np.ndarray, mass_kg: float) -> np.ndarray:
     """(N,) power delivered to the bell, W: m · (a_com + g ẑ) · v."""
     return mass_kg * np.sum((np.asarray(a_com, float) + G * _UP) * np.asarray(v, float), axis=1)

@@ -309,3 +309,40 @@ def test_prior_calibration_mounting_live():
         assert e["power_w"] == pytest.approx(r.power_w, rel=0.01), j
     assert np.array_equal(live.finish().calib.up_s, prior.up_s)
     assert live.finish().summary() == batch.summary()
+
+
+def test_unbridged_gap_corrected_live():
+    """A 0.5 s gap mid-swing (too long to bridge): the window holding it corrects the tilt
+    after it as the batch does, so the later reps keep their kind live too."""
+    run, truth = simulate([Rest(3), Swing(10), Rest(5), Snatch(6, "L"), Rest(4)])
+    tr = truth.reps[3]
+    run = without(run, (tr.i_low + tr.i_top) // 2, 200)
+    events, _ = feed_all(live_for(run), run)
+    batch = analyse_run(run)
+    reps, ref = [e for _, e in of_type(events, "rep")], batch_reps(batch)
+    assert [r.kind for r in ref] == [t.kind if i != 3 else "other"
+                                      for i, t in enumerate(truth.reps)]
+    assert [e["kind"] for e in reps] == [r.kind for r in ref]
+    assert [sorted(e["flags"]) for e in reps] == [sorted(r.flags) for r in ref]
+    for j, (e, r) in enumerate(zip(reps, ref)):
+        if "gap" not in r.flags:
+            assert e["power_w"] == pytest.approx(r.power_w, rel=0.01), j
+            assert e["apex_m"] == pytest.approx(r.apex_m, abs=0.02), j
+
+
+def test_unbridged_gap_without_correction_flags_live(monkeypatch):
+    """No tilt estimate possible (forced): live flags the same reps "orientation" as the
+    batch, emitting them once the next static window closes the region (the gap rep's live
+    flags cover only [low, top], before the region)."""
+    import powerkettle.pipeline as pl
+    monkeypatch.setattr(pl, "GAP_TILT_MIN_S", 1e6)
+    run, truth = simulate([Rest(3), Swing(8), Rest(5), Snatch(4, "L"), Rest(4)])
+    tr = truth.reps[3]
+    run = without(run, (tr.i_low + tr.i_top) // 2, 200)
+    events, _ = feed_all(live_for(run), run)
+    batch = analyse_run(run)
+    reps, ref = [e for _, e in of_type(events, "rep")], batch_reps(batch)
+    assert [i for i, r in enumerate(ref) if "orientation" in r.flags] == list(range(3, 8))
+    assert [e["kind"] for e in reps] == [r.kind for r in ref]
+    assert [sorted(e["flags"]) for e in reps if "gap" not in e["flags"]] == [
+        sorted(r.flags) for r in ref if "gap" not in r.flags]

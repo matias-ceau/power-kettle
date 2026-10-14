@@ -424,3 +424,66 @@ def test_reconnect_mid_swing_without_still_window(reconnect):
         assert r.features["top_tilt_deg"] == pytest.approx(90.0, abs=3.0)
     got = [r.power_w for r in reps_of(res)]
     assert np.mean(got) == pytest.approx(np.mean([t.power_w for t in truth2.reps]), rel=0.02)
+
+
+# ----------------------------------------------------------------------------- I2: long gaps
+GAP_SESSION = [Rest(3), Swing(12), Rest(5), Snatch(10, "R"), Rest(3)]
+
+
+@pytest.fixture(scope="module")
+def gap_sim():
+    return simulate(GAP_SESSION)
+
+
+@pytest.mark.parametrize("gap_s, rep", [(0.5, 4), (1.0, 4), (1.0, 17)])
+def test_unbridged_gap_tilt_corrected(gap_sim, gap_s, rep):
+    """A gap too long to bridge (> 0.25 s) mid-concentric: the rotation during the gap is lost
+    and the tilt is wrong until the next static window. The tilt error is estimated from the
+    detrend residual of the segments after the gap (mean a_com between zero-velocity anchors =
+    g·(E ẑ − ẑ)) and corrected, so the later reps keep their kind and are not flagged (a rep
+    whose low the gap swallowed starts at its edge and is flagged "gap")."""
+    run, truth = gap_sim
+    tr = truth.reps[rep]
+    i0 = (tr.i_low + tr.i_top) // 2
+    n = int(gap_s * 400)
+    res = analyse_run(with_gap(run, i0, n))
+    after = [r for r in reps_of(res) if r.i_low > i0 + n and "gap" not in r.flags]
+    true_after = [t for t in truth.reps if t.i_low > i0 + n + 4]
+    assert [(r.kind, r.hand) for r in after] == [(t.kind, t.hand) for t in true_after]
+    assert all(r.flags == set() for r in after)
+    for r, t in zip(after, true_after):
+        assert r.power_w == pytest.approx(t.power_w, rel=0.03)
+        assert r.apex_m == pytest.approx(t.apex_m, abs=0.05)
+    assert any("gap" in r.flags for r in reps_of(res))
+
+
+def test_unbridged_gap_without_correction_flags_orientation(gap_sim, monkeypatch):
+    """When the tilt error cannot be estimated (here: forced by requiring more anchored
+    segment time than the set holds), every rep from the gap to the next static window is
+    flagged "orientation" and "low_conf" (classification kept as computed; still counted)."""
+    import powerkettle.pipeline as pl
+    monkeypatch.setattr(pl, "GAP_TILT_MIN_S", 1e6)
+    run, truth = gap_sim
+    tr = truth.reps[4]
+    i0 = (tr.i_low + tr.i_top) // 2
+    res = analyse_run(with_gap(run, i0, 200))
+    reps = reps_of(res)
+    flagged = [i for i, r in enumerate(reps) if "orientation" in r.flags]
+    assert flagged == list(range(4, 12))
+    assert all("low_conf" in reps[i].flags for i in flagged)
+    assert all(r.flags == set() for r in reps[12:])
+
+
+def test_unbridged_gap_before_calibration_window_corrected():
+    """The same before the calibration window (integrated backwards through the gap): the reps
+    before the gap are corrected."""
+    run, truth = simulate([Rest(0.5), Swing(10), Rest(3), Swing(3), Rest(3)])
+    tr = truth.reps[6]
+    i0 = (tr.i_low + tr.i_top) // 2
+    res = analyse_run(with_gap(run, i0, 200))
+    assert res.calib.still.start > i0
+    before = [r for r in reps_of(res) if r.i_end < i0]
+    assert [r.kind for r in before] == ["swing"] * 6
+    assert all(r.flags == set() for r in before)
+    for r, t in zip(before, truth.reps):
+        assert r.apex_m == pytest.approx(t.apex_m, abs=0.05)
