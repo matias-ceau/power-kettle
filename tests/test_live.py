@@ -246,12 +246,37 @@ def test_calibration_event_carries_warnings():
     assert any("accelerometer magnitude" in w for w in cal["warnings"])
 
 
-def test_index_going_backwards_rejected():
-    run, _ = simulate([Rest(3)])
+def test_index_reset_rejected():
+    """A sample index going back by more than the firmware ring (1600 samples) is a new run."""
+    run, _ = simulate([Rest(10)])
     live = live_for(run)
-    live.feed(0, run.raw[:CHUNK])
+    live.feed(2000, run.raw[:CHUNK])
+    live.feed(2000 + CHUNK, run.raw[CHUNK:2 * CHUNK])
     with pytest.raises(ValueError, match="backwards"):
-        live.feed(5, run.raw[5:5 + CHUNK])
+        live.feed(2000 + CHUNK - 1601, run.raw[:CHUNK])
+
+
+def test_duplicate_and_overlapping_packets_dropped():
+    """A packet sent twice, or overlapping the samples already received (a BLE retransmit):
+    the rows already seen are dropped, the new ones kept; the result is the batch one."""
+    run, truth = simulate(SHORT)
+    live = live_for(run)
+    events, fed = [], 0
+    for lo in range(0, len(run.raw), CHUNK):
+        hi = min(lo + CHUNK, len(run.raw))
+        events += live.feed(lo, run.raw[lo:hi])
+        if lo % (10 * CHUNK) == 0:
+            assert live.feed(lo, run.raw[lo:hi]) == []  # duplicate: nothing new
+            back = max(0, lo - 7)  # overlapping: 7 old rows, then the next packet's start
+            events += live.feed(back, run.raw[back:hi + 5])
+            fed = hi + 5
+        else:
+            fed = hi
+    assert fed >= len(run.raw)
+    assert not [e for e in events if e["type"] == "warning"]
+    batch = analyse_run(run)
+    assert [e["kind"] for e in events if e["type"] == "rep"] == [r.kind for r in batch_reps(batch)]
+    assert live.finish().summary() == batch.summary()
 
 
 def live_matches_batch(run, truth, power_rel=0.01):

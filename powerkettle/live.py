@@ -92,8 +92,10 @@ Known differences from the batch result
   cut to ``MAX_WINDOW_S``: the window and the cost of each tick grow with its length. Nor is a
   static hold after a low whose top is not confirmed (below ``floor_max_height_m``).
 
-Samples must arrive in order; a sample index going backwards (a new run) raises ValueError: use a
-new ``LiveAnalyser`` per run. Stdlib + numpy only.
+Samples must arrive in order. Rows already received (a duplicate or overlapping packet, e.g. a
+BLE retransmit) are dropped; a packet whose first index lies more than the firmware ring
+(``rawlog.RING_TOLERANCE_SAMPLES``) before the previous packet's is a new run (the sensor
+restarted) and raises ValueError: use a new ``LiveAnalyser`` per run. Stdlib + numpy only.
 """
 from __future__ import annotations
 
@@ -129,7 +131,7 @@ from .pipeline import (
     motion_stages,
     pre_calibration_warning,
 )
-from .rawlog import Run
+from .rawlog import RING_TOLERANCE_SAMPLES, Run
 from .reps import Rep, SetResult, rep_metrics
 
 PROCESS_EVERY_S = 0.25  # re-run the stages once this much new data has arrived
@@ -165,6 +167,7 @@ class LiveAnalyser:
         self.acc_range_g, self.gyro_range_dps = acc_range_g, gyro_range_dps
         self.rate_estimated = rate_estimated
         self._first: int | None = None  # sensor sample_index of row 0
+        self._last_first = 0  # highest first_index fed
         self._n = 0  # rows received (gaps included)
         self._cap = 0
         self._raw = np.zeros((0, 6), np.int16)
@@ -206,11 +209,17 @@ class LiveAnalyser:
         events: list[dict] = []
         first_index = int(first_index)
         if self._first is None:
-            self._first = first_index
-        row0 = first_index - self._first
-        if row0 < self._n:
+            self._first = self._last_first = first_index
+        if first_index < self._last_first - RING_TOLERANCE_SAMPLES:
             raise ValueError(f"sample index went backwards ({first_index} after "
                              f"{self._first + self._n - 1}): start a new LiveAnalyser per run")
+        self._last_first = max(self._last_first, first_index)
+        row0 = first_index - self._first
+        if row0 < self._n:  # a duplicate or overlapping packet: keep the rows not seen yet
+            raw = raw[self._n - row0:]
+            if len(raw) == 0:
+                return []
+            first_index, row0 = self._first + self._n, self._n
         if row0 > self._n:
             self._gaps.append((self._first + self._n - 1, first_index))
             events.append({"type": "warning", "message": (
