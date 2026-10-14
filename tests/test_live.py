@@ -269,3 +269,14 @@ def live_matches_batch(run, truth, power_rel=0.01):
 def test_accelerometer_scale_corrected_live():
     run, truth = simulate(SHORT, cfg=SimConfig(acc_scale=1.05))
     live_matches_batch(run, truth)
+
+
+@pytest.mark.parametrize("yaws", [(120, 120, 120), (180, 0, 0), (0, 85, 0)],
+                         ids=lambda y: "-".join(map(str, y)))
+def test_bell_parked_turned_live(yaws):
+    """The θ plane comes from the motion per stretch (anchors.motion_forward) live as in the
+    batch: the sums before a checkpoint are carried, so the reps match the batch result."""
+    cal, mid, end = yaws
+    run, truth = simulate([Rest(3, yaw_deg=cal), Swing(6), Rest(5, yaw_deg=mid),
+                           Snatch(5, "L"), Rest(3, yaw_deg=end)])
+    live_matches_batch(run, truth)

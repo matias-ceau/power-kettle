@@ -32,7 +32,15 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
-from .anchors import Anchor, AnchorConfig, detect_anchors, refine_rests, set_forwards
+from .anchors import (
+    Anchor,
+    AnchorConfig,
+    Stretch,
+    StretchMotion,
+    detect_anchors_and_forwards,
+    refine_rests,
+    set_forwards,
+)
 from .bell import BellProfile
 from .calibration import (
     Calibration,
@@ -139,6 +147,7 @@ class Motion:
     bias: np.ndarray  # (N, 3) working gyro bias, rad/s
     kin: Kinematics
     raw_anchors: list[Anchor]  # detect_anchors (rests not yet refined)
+    stretches: list[Stretch]  # between the raw rests, with their forwards (θ planes)
     anchors: list[Anchor]  # after refine_rests
     v: np.ndarray  # (N, 3) m/s
     pos: np.ndarray  # (N, 3) m
@@ -146,19 +155,22 @@ class Motion:
 
 
 def motion_stages(imu: ImuData, calib: Calibration, bell: BellProfile, cfg: AnalysisConfig,
-                  forward0: np.ndarray | None = None) -> Motion:
+                  forward0: np.ndarray | None = None,
+                  motion0: StretchMotion | None = None) -> Motion:
     """Orientation, COM acceleration, anchors, velocity / position, ``refine_rests``, velocity /
     position again on the refined anchors, and power (the chain of ``analyse_run``; `forward0`
-    as in ``detect_anchors``)."""
+    and `motion0` as in ``detect_anchors_and_forwards``)."""
     q, bias = estimate_orientation(imu, calib, return_bias=True)
     kin = com_acceleration(imu, q, calib, bias)
-    raw = detect_anchors(imu, q, kin, calib, cfg.anchors, forward0)
+    raw, stretches = detect_anchors_and_forwards(imu, q, kin, calib, cfg.anchors, forward0,
+                                                 motion0)
     v = segment_velocity(kin.a_com, imu.t, raw)
     pos = segment_position(v, imu.t, raw)
     anchors = refine_rests(raw, pos, cfg.anchors)
     v = segment_velocity(kin.a_com, imu.t, anchors)
     pos = segment_position(v, imu.t, anchors)
-    return Motion(q, bias, kin, raw, anchors, v, pos, power(kin.a_com, v, bell.mass_kg))
+    return Motion(q, bias, kin, raw, stretches, anchors, v, pos,
+                  power(kin.a_com, v, bell.mass_kg))
 
 
 def map_markers(run: Run, markers: list[tuple[float, str]]) -> list[tuple[int, str]]:
@@ -226,7 +238,7 @@ def analyse_run(run: Run, bell: BellProfile = BellProfile(),
         _apply_labels(reps, labels)
 
     bounds = segment_sets(anchors)  # one per run of non-rest anchors, as set_forwards
-    hints = set_forwards(q, calib, anchors, cfg.anchors)
+    hints = set_forwards(q, calib, anchors, cfg.anchors, imu, m.kin)
     for s in sets:
         hint = hints[bounds.index((s.i_start, s.i_end))]
         fwd = athlete_forward(v, slice(s.i_start, s.i_end + 1), hint)

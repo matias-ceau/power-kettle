@@ -2,8 +2,8 @@
 
 The estimate's world frame has an arbitrary heading, so a rep's path is expressed in the frame
 of the lifter: ``athlete_forward`` finds the horizontal direction the bell moves along in a set
-(first principal axis of the horizontal velocity, its sign taken from the rest-based forward
-``anchors.set_forwards``), and ``rep_path`` rotates the relative position into that frame and
+(first principal axis of the horizontal velocity, its sign taken from the set's θ-plane forward
+``anchors.set_forwards``, found from the motion), and ``rep_path`` rotates the relative position into that frame and
 decimates it for display. Stdlib + numpy only.
 """
 from __future__ import annotations

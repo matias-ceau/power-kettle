@@ -317,3 +317,29 @@ def test_accelerometer_scale_error_corrected(scale):
     for kind in ("swing", "snatch"):
         true_avg = np.mean([t.power_w for t in truth.reps if t.kind == kind])
         assert res.metrics.by_kind[kind].avg == pytest.approx(true_avg, rel=0.02), kind
+
+
+# ----------------------------------------------------------------------------- I1: parked yaw
+YAW_SESSION = [Swing(10), Rest(5), Snatch(8, "R"), Rest(3)]
+
+
+@pytest.mark.parametrize("yaws", [(45, 45, 45), (70, 70, 70), (85, 85, 85), (120, 120, 120),
+                                  (180, 0, 0), (0, 120, 0)],
+                         ids=lambda y: "-".join(map(str, y)))
+def test_bell_parked_turned(yaws):
+    """The bell parked (and calibrated) turned about its own up axis: the rest-based forward is
+    off by the yaw, the θ plane comes from the motion, so every rep is found and classified."""
+    cal, mid, end = yaws
+    moves = [Rest(3, yaw_deg=cal), YAW_SESSION[0], Rest(5, yaw_deg=mid), YAW_SESSION[2],
+             Rest(3, yaw_deg=end)]
+    run, truth = simulate(moves)
+    res = analyse_run(run)
+    assert [(r.kind, r.hand) for r in reps_of(res)] == [(t.kind, t.hand) for t in truth.reps]
+    assert len(truth.reps) == 18 and len(res.sets) == 2
+    for kind in ("swing", "snatch"):
+        true_avg = np.mean([t.power_w for t in truth.reps if t.kind == kind])
+        assert res.metrics.by_kind[kind].avg == pytest.approx(true_avg, rel=0.02), kind
+    for r in reps_of(res):  # paths: forward from the motion, apex in z
+        assert np.nanmax(r.path[:, 2]) == pytest.approx(r.apex_m, abs=0.02)
+    swing = reps_of(res)[0]
+    assert swing.path[np.nanargmax(swing.path[:, 2]), 0] > 0.6  # the swing top is in front

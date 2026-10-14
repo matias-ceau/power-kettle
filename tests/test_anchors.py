@@ -314,3 +314,23 @@ def test_theta_peak_in_hand_held_window_is_never_a_low():
     for i0, i1, _ in lockouts:
         assert not [a for a in anchors if a.kind == "low" and i0 - 20 <= a.i0 <= i1 + 20]
     assert_one_to_one(truth.anchor_windows, anchors)
+
+
+def test_set_forwards_from_motion_ignore_parked_yaw():
+    """The bell parked turned 120° before the swing set: the rest-based forward of that set is
+    60° off (sign-continuous); the motion forward (bell-up sweep axis, sign from the forward
+    acceleration at the backswing lows) stays on the athlete's forward, +x here. The snatch
+    set's sign is decided although θ itself is not asymmetric enough (+40° / −30°)."""
+    run, truth = simulate([Rest(3), Snatch(6, "L"), Rest(5, yaw_deg=120.0), Swing(8), Rest(3)],
+                          BELL)
+    imu = scale_run(run)
+    calib = calibrate(imu, BELL)
+    q, bias = estimate_orientation(imu, calib, return_bias=True)
+    kin = com_acceleration(imu, q, calib, bias)
+    anchors = detect_anchors(imu, q, kin, calib)
+    rest_based = set_forwards(q, calib, anchors)
+    assert np.degrees(np.arccos(rest_based[1][0])) == pytest.approx(60.0, abs=3.0)
+    for f in set_forwards(q, calib, anchors, AnchorConfig(), imu, kin):
+        assert f[2] == 0.0 and np.linalg.norm(f) == pytest.approx(1.0)
+        assert np.degrees(np.arccos(np.clip(f[0], -1, 1))) < 2.0
+    assert_one_to_one(truth.anchor_windows, anchors)

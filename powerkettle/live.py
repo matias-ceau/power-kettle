@@ -95,7 +95,7 @@ from typing import Callable
 
 import numpy as np
 
-from .anchors import Anchor, _forward_chain, _static_windows, sagittal_tilt
+from .anchors import Anchor, StretchMotion, _static_windows, motion_sums, sagittal_tilt
 from .bell import BellProfile
 from .calibration import SMOOTH_SECONDS, Calibration, CalibrationError, calibrate, find_still_window
 from .classify import classify, rep_features
@@ -121,7 +121,8 @@ class _Carry:
     """State at a checkpoint (the window's first sample)."""
     q: np.ndarray  # (4,) world <- sensor
     bias: np.ndarray  # (3,) working gyro bias, rad/s
-    forward: np.ndarray  # (3,) forward in force (θ plane)
+    forward: np.ndarray  # (3,) rest-based (fallback) forward in force
+    motion: StretchMotion | None  # sums over the stretch before the checkpoint (None: it starts)
 
 
 class LiveAnalyser:
@@ -282,21 +283,17 @@ class LiveAnalyser:
         w0, n = self._w0, self._n
         imu = self._imu(w0, n)
         if self._carry is None:
-            calib, fwd0 = self._calib, None
+            calib, fwd0, motion0 = self._calib, None, None
         else:
             calib = dataclasses.replace(self._calib, q0=self._carry.q,
                                         gyro_bias=self._carry.bias, still=slice(0, 1))
-            fwd0 = self._carry.forward
-        m = motion_stages(imu, calib, self.bell, self.cfg, fwd0)
-        raw_rests = [(a.i0, a.i1) for a in m.raw_anchors if a.kind == "rest"]
-        first, chain = _forward_chain(m.q, calib, raw_rests,
-                                      self.cfg.anchors.forward_upright_max_deg, fwd0)
+            fwd0, motion0 = self._carry.forward, self._carry.motion
+        m = motion_stages(imu, calib, self.bell, self.cfg, fwd0, motion0)
 
-        def forward_at(i: int) -> np.ndarray:  # local row: forward of the last rest ended by i
-            k = sum(1 for _, i1 in raw_rests if i1 <= i)
-            return chain[k - 1] if k else first
+        def stretch_at(i: int):  # local row -> its stretch (in a rest: the stretch after it)
+            return next((st for st in m.stretches if i < st.s1), m.stretches[-1])
 
-        win = _Window(w0, imu, calib, m, forward_at, self.bell.mass_kg)
+        win = _Window(w0, imu, calib, m, lambda i: stretch_at(i).forward, self.bell.mass_kg)
         anchors = [Anchor(a.i0 + w0, a.i1 + w0, a.kind) for a in m.anchors]
         events = self._advance(win, anchors)
 
@@ -397,8 +394,16 @@ class LiveAnalyser:
                 and not any(a.kind == "rest" and a.i0 <= c <= a.i1 for a in win.m.raw_anchors)):
             target = c  # inside a long hand-held static window
         if target > 0:
+            st = next((x for x in win.m.stretches if target < x.s1), win.m.stretches[-1])
+            motion = None  # the stretch starts at the checkpoint (it ends a rest)
+            if st.s0 < target:  # sums over the stretch's part before the checkpoint
+                sl = slice(st.s0, target)
+                prior = self._carry.motion if st.s0 == 0 and self._carry is not None else None
+                motion = motion_sums(win.m.q[sl], win.calib, win.m.kin.omega_w[sl],
+                                     win.imu.valid[sl], prior)
+                motion.sign_ref = st.motion.sign_ref  # decided on the window's data
             self._carry = _Carry(win.m.q[target].copy(), win.m.bias[target].copy(),
-                                 np.array(win.forward_at(target), dtype=float))
+                                 np.array(st.hint, dtype=float), motion)
             self._w0 = w0 + target
 
     def _clean(self, w0: int) -> np.ndarray:
@@ -422,7 +427,7 @@ class _Window:
     imu: ImuData
     calib: Calibration
     m: Motion
-    forward_at: Callable[[int], np.ndarray]  # local row -> forward in force there (θ plane)
+    forward_at: Callable[[int], np.ndarray]  # local row -> its stretch's forward (θ plane)
     mass_kg: float
 
     def with_top(self, low: int, top: Anchor) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
