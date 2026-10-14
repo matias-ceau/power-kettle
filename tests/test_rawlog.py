@@ -31,8 +31,8 @@ def pkt(seq, first, n, flags=0):
     return struct.pack("<HIBB", seq & 0xFFFF, first, n, flags) + np.arange(n*6, dtype="<i2").tobytes()
 
 
-def status_bytes(acc=16, gyro=2000, odr=400, sample_index=0, time_us=0):
-    return struct.pack("<BBHHBBHhIIQ", 1, 1, 4000, odr, acc, 0, gyro, 0, 0, sample_index, time_us)
+def status_bytes(acc=16, gyro=2000, odr=400, sample_index=0, time_us=0, flags=1):
+    return struct.pack("<BBHHBBHhIIQ", 1, flags, 4000, odr, acc, 0, gyro, 0, 0, sample_index, time_us)
 
 
 def test_roundtrip_bytes(tmp_path):
@@ -111,12 +111,51 @@ def test_default_ranges_without_status():
     assert run.rate_hz == 400.0 and run.statuses == []
 
 
+def stream_records(seconds, rate=402, t0_ms=0.0):
+    """One second of packets (19 samples each, 402/s -> last packet short) followed by a status."""
+    recs, idx = [], 0
+    for sec in range(seconds):
+        target = (sec + 1) * rate
+        while idx < target:
+            n = min(19, target - idx)
+            recs.append(RawRecord(1, t0_ms + sec * 1000.0, pkt(idx // 19, idx, n)))
+            idx += n
+        recs.append(RawRecord(2, t0_ms + sec * 1000.0 + 500, status_bytes(sample_index=idx, time_us=(sec + 1) * 1_000_000)))
+    return recs, idx
+
+
 def test_run_rate_estimated_from_its_statuses():
-    recs = [RawRecord(2, 0.0, status_bytes(odr=400)), RawRecord(1, 1.0, pkt(0, 0, 19))]
-    recs += [RawRecord(2, 2.0 + i, status_bytes(sample_index=int(i*402), time_us=i*1_000_000)) for i in range(10)]
+    recs, _ = stream_records(10)
     run = to_recording(RawLog({}, recs)).runs[0]
     assert run.rate_hz == pytest.approx(402.0, rel=1e-6)
     assert len(run.statuses) == 10
+
+
+def test_idle_trailing_statuses_do_not_affect_rate():
+    recs, last = stream_records(10)
+    # device stopped: status keeps notifying at 1 Hz, streaming flag clear, constant sample_index
+    recs += [RawRecord(2, 20000.0 + i * 1000.0, status_bytes(sample_index=last, time_us=(11 + i) * 1_000_000, flags=0))
+             for i in range(30)]
+    run = to_recording(RawLog({}, recs)).runs[0]
+    assert run.rate_hz == pytest.approx(402.0, rel=1e-6)
+    assert len(run.statuses) == 10
+
+
+def test_backwards_status_not_accepted():
+    recs, last = stream_records(10)
+    recs.append(RawRecord(2, 30000.0, status_bytes(sample_index=last - 5, time_us=11_000_000)))
+    assert len(to_recording(RawLog({}, recs)).runs[0].statuses) == 10
+
+
+def test_post_reset_status_before_new_run_does_not_join_old_run():
+    recs, last = stream_records(10)
+    # device restarted: streaming status with sample_index back at 0 arrives before the first new packet
+    recs.append(RawRecord(2, 30000.0, status_bytes(sample_index=0, time_us=500_000)))
+    recs.append(RawRecord(1, 30001.0, pkt(0, 0, 19)))
+    rec = to_recording(RawLog({}, recs))
+    assert len(rec.runs) == 2
+    assert len(rec.runs[0].statuses) == 10
+    assert rec.runs[0].rate_hz == pytest.approx(402.0, rel=1e-6)
 
 
 def test_markers_events_meta():
