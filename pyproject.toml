@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "powerkettle"
+version = "0.1.0"
+description = "Power Kettle kettlebell power meter: protocol decoding and analysis"
+requires-python = ">=3.11"
+dependencies = ["numpy"]
+
+[project.optional-dependencies]
+dev = ["pytest"]
+
+[tool.setuptools]
+packages = ["powerkettle"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
