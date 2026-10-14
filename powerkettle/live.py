@@ -1,8 +1,8 @@
 """Incremental analysis while recording (on the phone, in Pyodide): ``LiveAnalyser``.
 
 ``feed`` takes the samples of each BLE packet and returns the events that became certain;
-``finish`` returns the batch result (``pipeline.analyse_run`` on everything fed), which is the
-reference: live events are a preview of it.
+``finish`` returns the batch result (``pipeline.analyse_run`` on everything fed). That result is
+authoritative (it is what gets stored); live events are a preview of it.
 
 Approach
 --------
@@ -12,14 +12,27 @@ at least ``PROCESS_EVERY_S`` of new data has arrived, the stages from orientatio
 (``pipeline.motion_stages``) are re-run on a window from a *checkpoint* to the newest sample,
 never on the whole session. The window's orientation starts from the orientation, working gyro
 bias and forward carried over from the run that set the checkpoint, so within the window the
-estimate is the batch one. A checkpoint is final data only:
+estimate is the batch one. A checkpoint is final data only, the latest of:
 
-- ``CONTEXT_S`` before the low of the pending (or last reported) rep, moved back to a sample
-  outside every static window (so no gyro-bias window and no static correction straddles it);
-- or the last sample of a floor rest the bell has left (its static window has ended).
+- ``CONTEXT_S`` before the low of the pending rep (before the newest sample when no rep is
+  pending), moved back to a sample outside every static window (so no gyro-bias window and no
+  static correction straddles it);
+- the last sample of a floor rest the bell has left (its static window has ended);
+- with no rep pending, ``MAX_WINDOW_S`` before the newest sample when that lies inside a
+  hand-held static window (a long overhead hold, which never becomes a rest): the window then
+  starts inside the hold, carrying the working bias in force there, and re-estimates the bias
+  from the part of the hold it holds rather than from the whole hold as the batch does (a
+  residual difference of the order of gyro noise / √samples, ~1e-4 rad/s in simulation).
+
+Every checkpoint is a valid sample with no invalid sample within ``GAP_INTERP_MAX_S`` plus the
+gap guards (+2) on either side: a window starting in or next to a gap could not bridge the gap
+(``orientation._bridge_gaps`` needs a valid sample before it) and would hold the orientation
+still across it, an error every later window would inherit. Without such a sample the window
+keeps its start.
 
 While the bell rests on the floor after a confirmed rest and every new sample is static, nothing
-can change and the stages are not re-run.
+can change and the stages are not re-run; the first tick after the bell leaves a rest re-runs
+them over the whole rest once (a one-off cost proportional to the rest's length).
 
 Events (JSON-safe dicts, in this order)
 ---------------------------------------
@@ -63,8 +76,11 @@ Known differences from the batch result
 - The lockout window may still grow after the rep is sent (``top_static_s``, ``top_tilt_deg``
   and the path cover the part known then); the path's forward comes from the set's data so far.
 - Set metrics use the live reps (no eccentric work or cycle time: those need the next low).
-- During a hand-held static hold the checkpoint cannot move into it, so the window (and the cost
-  of each tick) grows with the hold's length.
+- A session that ends mid-set (no confirmed floor rest after the last rep) gets no live
+  ``set_end``; ``finish`` still reports that set.
+- A quiet overhead hold (no tremor, a rest relabelled as a lockout by ``refine_rests``) is not
+  cut to ``MAX_WINDOW_S``: the window and the cost of each tick grow with its length. Nor is a
+  static hold after a low whose top is not confirmed (below ``floor_max_height_m``).
 
 Samples must arrive in order; a sample index going backwards (a new run) raises ValueError: use a
 new ``LiveAnalyser`` per run. Stdlib + numpy only.
@@ -85,7 +101,7 @@ from .classify import classify, rep_features
 from .imu import GAP_GUARD_SAMPLES, ImuData, scale_run
 from .integrate import power, segment_position, segment_velocity
 from .metrics import set_metrics
-from .orientation import static_mask
+from .orientation import GAP_INTERP_MAX_S, static_mask
 from .paths import athlete_forward, rep_path
 from .pipeline import AnalysisConfig, Motion, SessionResult, _jsonable, analyse_run, motion_stages
 from .rawlog import Run
@@ -93,6 +109,7 @@ from .reps import Rep, SetResult, rep_metrics
 
 PROCESS_EVERY_S = 0.25  # re-run the stages once this much new data has arrived
 CONTEXT_S = 2.0  # the window starts this long before the pending low (prominence, filters)
+MAX_WINDOW_S = 6.0  # a window inside a long hand-held hold is cut to this length
 DESCENT_MIN_MS = 0.5  # m/s: falling speed that confirms a swing top
 _TOPS = ("top_swing", "top_lockout")
 _INITIAL_CAPACITY = 4096
@@ -359,22 +376,39 @@ class LiveAnalyser:
 
     def _move_checkpoint(self, win: "_Window") -> None:
         """Move the window start forward to the latest final checkpoint (module docstring)."""
-        w0, n = win.w0, self._n
-        target = w0
-        low = self._low if self._low is not None else self._last_low
-        if low is not None:
-            c = min(low - round(CONTEXT_S * self.rate_hz), n - 1)
-            if c > w0:
-                moving = np.flatnonzero(~static_mask(win.imu)[:c - w0 + 1])
-                if len(moving):
-                    target = max(target, w0 + int(moving[-1]))
-        if self._rest_end is not None and self._rest_end < n - 1:
-            target = max(target, self._rest_end)
-        if target > w0:
-            i = target - w0
-            self._carry = _Carry(win.m.q[i].copy(), win.m.bias[i].copy(),
-                                 np.array(win.forward_at(i), dtype=float))
-            self._w0 = target
+        w0, n, fs = win.w0, self._n, self.rate_hz
+        static = static_mask(win.imu)
+        clean = self._clean(w0)
+        moving = np.flatnonzero(clean & ~static)
+        target = 0  # local row; 0 keeps the window start
+        ref = (self._low if self._low is not None else n - 1) - round(CONTEXT_S * fs) - w0
+        k = int(np.searchsorted(moving, ref, side="right")) - 1
+        if ref > 0 and k >= 0:
+            target = int(moving[k])
+        end = None if self._rest_end is None else self._rest_end - w0
+        if end is not None and 0 < end < n - 1 - w0 and clean[end]:
+            target = max(target, end)  # the last sample of a floor rest the bell has left
+        c = n - 1 - w0 - round(MAX_WINDOW_S * fs)
+        if (self._low is None and c > target and static[c] and clean[c]
+                and not any(a.kind == "rest" and a.i0 <= c <= a.i1 for a in win.m.raw_anchors)):
+            target = c  # inside a long hand-held static window
+        if target > 0:
+            self._carry = _Carry(win.m.q[target].copy(), win.m.bias[target].copy(),
+                                 np.array(win.forward_at(target), dtype=float))
+            self._w0 = w0 + target
+
+    def _clean(self, w0: int) -> np.ndarray:
+        """(n - w0,) bool per row of [w0, n): valid, and no invalid sample within ±r rows, r
+        covering an orientation gap bridge and its gap guards (a window starting at or next to
+        a gap would hold the orientation still across the gap); False where those rows are not
+        all received yet."""
+        n = self._n
+        r = math.ceil(GAP_INTERP_MAX_S * self.rate_hz) + GAP_GUARD_SAMPLES + 2
+        lo = max(0, w0 - r)
+        bad = np.concatenate([[0], np.cumsum(~self._valid[lo:n])])
+        rows = np.arange(w0, n)
+        a, b = np.maximum(rows - r, 0) - lo, rows + r + 1 - lo
+        return (b <= n - lo) & (bad[np.minimum(b, n - lo)] - bad[a] == 0)
 
 
 @dataclass

@@ -17,6 +17,7 @@ from .calibration import Calibration
 from .imu import G, ImuData
 
 STATIC_HOLD_SECONDS = 0.1  # a static run must last at least this long
+GAP_INTERP_MAX_S = 0.25  # default longest gap bridged by interpolation (estimate_orientation)
 _EPS = 1e-12
 
 
@@ -159,7 +160,7 @@ def working_bias(imu: ImuData, bias0: np.ndarray, static: np.ndarray, start: int
 def estimate_orientation(imu: ImuData, calib: Calibration, gain: float = 2.0,
                          bias_update_min_s: float = 1.0, bias_max_std: float = 0.01,
                          bias_max_jump: float = 0.03, return_bias: bool = False,
-                         gap_interp_max_s: float = 0.25):
+                         gap_interp_max_s: float = GAP_INTERP_MAX_S):
     """(N, 4) world <- sensor orientation, scalar-first; with `return_bias` also the (N, 3)
     working gyro bias that was subtracted at each sample.
 

@@ -7,7 +7,7 @@ import pytest
 
 from powerkettle.bell import BellProfile
 from powerkettle.calibration import CalibrationError
-from powerkettle.live import LiveAnalyser
+from powerkettle.live import CONTEXT_S, MAX_WINDOW_S, LiveAnalyser
 from powerkettle.pipeline import AnalysisConfig, analyse_run
 from powerkettle.rawlog import Run
 from powerkettle.simulate import Hold, PartialRep, Rest, SimConfig, Snatch, Swing, simulate
@@ -145,10 +145,7 @@ def test_gap_reported_and_reps_still_match():
     run, truth = simulate(SHORT, cfg=SimConfig(seed=2))
     tr = truth.reps[2]
     i0 = (tr.i_low + tr.i_top) // 2
-    keep = np.ones(len(run.sample_index), dtype=bool)
-    keep[i0:i0 + 40] = False
-    run = dataclasses.replace(run, sample_index=run.sample_index[keep], raw=run.raw[keep],
-                              gaps=[(i0 - 1, i0 + 40)])
+    run = without(run, i0, 40)
     live = live_for(run)
     events, _ = feed_all(live, run)
     warns = [e for _, e in of_type(events, "warning")]
@@ -161,6 +158,64 @@ def test_gap_reported_and_reps_still_match():
     for j, (e, r) in enumerate(zip(reps, ref)):
         if j != 2:
             assert e["power_w"] == pytest.approx(r.power_w, rel=0.01), j
+    assert live.finish().summary() == batch.summary()
+
+
+def without(run: Run, i0: int, n: int) -> Run:
+    """`run` with samples [i0, i0 + n) dropped (a BLE gap)."""
+    keep = np.ones(len(run.sample_index), dtype=bool)
+    keep[i0:i0 + n] = False
+    return dataclasses.replace(run, sample_index=run.sample_index[keep], raw=run.raw[keep],
+                               gaps=[(i0 - 1, i0 + n)])
+
+
+def test_gap_on_a_checkpoint_keeps_orientation():
+    """A 60-sample gap centred on a sample that is a window start (checkpoint) of the clean
+    run: the window must not start in or next to the gap (orientation would freeze there and
+    the error carry over), so heights and paths stay those of the batch result."""
+    run, _ = simulate([Rest(3), Swing(15), Rest(4)])
+    checkpoint = 3619  # a window start of the clean run, mid-set
+    run = without(run, checkpoint - 30, 60)
+    events, _ = feed_all(live_for(run), run)
+    batch = analyse_run(run)
+    reps, ref = [e for _, e in of_type(events, "rep")], batch_reps(batch)
+    assert len(reps) == len(ref) == 15
+    for j, (e, r) in enumerate(zip(reps, ref)):
+        if not np.isfinite(r.apex_m):
+            assert e["apex_m"] is None, j
+            continue
+        assert e["apex_m"] == pytest.approx(r.apex_m, abs=0.02), j
+        live_path = np.array(e["path"], dtype=float)
+        assert np.allclose(live_path, r.path[:len(live_path)][:, [0, 2]], atol=0.03,
+                           equal_nan=True), j
+
+
+def test_long_hold_window_bounded():
+    """A 60 s overhead hold (tremor, never a rest): the processed window stays bounded and the
+    reps still match the batch result."""
+    run, _ = simulate([Rest(3), Snatch(3), Hold(60), Snatch(3), Rest(4)])
+    live = live_for(run)
+    longest, events, spent = 0, [], 0.0
+    for lo in range(0, len(run.raw), CHUNK):
+        longest = max(longest, live._n - live._w0)  # window of a tick in this feed, less it
+        t0 = time.perf_counter()
+        events += live.feed(lo, run.raw[lo:lo + CHUNK])
+        spent += time.perf_counter() - t0
+    after_rest = 5 * run.rate_hz  # the window may hold the first rest until its end
+    assert longest <= max((MAX_WINDOW_S + CONTEXT_S) * run.rate_hz, after_rest)
+    assert spent < 10.0
+    batch = analyse_run(run)
+    reps, ref = [e for e in events if e["type"] == "rep"], batch_reps(batch)
+    assert [e["kind"] for e in reps] == [r.kind for r in ref]
+    assert [e["kind"] for e in reps].count("snatch") == 6
+    for j, (e, r) in enumerate(zip(reps, ref)):
+        # The window cut inside the hold re-estimates the gyro bias from part of it (~0.01°
+        # of orientation after it). The "other" rep (the floor touch between the two sets, net
+        # power ≈ −90 W of large opposite works) has its low on a θ plateau that this moves by
+        # 2 samples: 6 W. Snatch reps stay within 1 %.
+        tol = {"rel": 0.01} if r.kind == "snatch" else {"rel": 0.01, "abs": 10.0}
+        assert e["power_w"] == pytest.approx(r.power_w, **tol), j
+        assert e["apex_m"] == pytest.approx(r.apex_m, abs=0.02), j
     assert live.finish().summary() == batch.summary()
 
 
