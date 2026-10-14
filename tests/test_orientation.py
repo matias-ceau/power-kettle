@@ -68,6 +68,42 @@ def test_bias_reestimated_after_long_rest(session):
     assert np.allclose(q2, estimate_orientation(imu, bad, bias_update_min_s=1e6))
 
 
+def test_midsession_bias_change_is_absorbed(session):
+    imu, truth, cal = session
+    start = int(3.0 * imu.fs)  # the snatch set starts
+    gyro = imu.gyro.copy()
+    gyro[start:] += 0.005
+    shifted = dataclasses.replace(imu, gyro=gyro)
+    q, bias = estimate_orientation(shifted, cal, return_bias=True)
+    err = np.degrees(tilt_error(q, truth.quat_ws))
+    assert err.max() < 3.0, f"max tilt error {err.max():.2f} deg"
+    new_true = truth.gyro_bias_s + 0.005
+    assert np.all(np.abs(bias[int(36 * imu.fs)] - new_true) < 0.002)  # after Rest(10)
+    assert np.all(np.abs(bias[1] - truth.gyro_bias_s) < 0.002)
+
+
+def test_slow_rotation_window_not_absorbed_as_bias():
+    fs, rate = 400.0, 0.1
+    rng = np.random.default_rng(3)
+    true_bias = np.array([0.01, -0.02, 0.015])
+    segs = [(int(3 * fs), 0.0, G), (int(2 * fs), rate, G), (int(5 * fs), 0.0, 2 * G)]
+    n = sum(s[0] for s in segs)
+    imu = synthetic(n)
+    w = np.concatenate([np.full(c, r) for c, r, _ in segs])
+    imu.acc[:, 2] = np.concatenate([np.full(c, a) for c, _, a in segs])  # last set: not static
+    imu.gyro[:, 2] = w
+    imu.gyro += true_bias + 0.005 * rng.standard_normal((n, 3))
+    cal = types_cal(true_bias, np.array([1.0, 0.0, 0.0, 0.0]))
+    q, bias = estimate_orientation(imu, cal, return_bias=True)
+    assert np.all(np.abs(bias[-1] - true_bias) < 0.002)
+    # total rotation about z is the true 0.1 rad/s x 2 s, not inflated by an absorbed bias
+    yaw = 2.0 * np.arctan2(q[-1, 3], q[-1, 0])
+    assert abs(yaw - rate * 2.0) < np.radians(1.0)
+    # control: the std/jump checks are what protect it
+    _, loose = estimate_orientation(imu, cal, bias_max_std=1.0, bias_max_jump=1.0, return_bias=True)
+    assert abs(loose[-1, 2] - true_bias[2]) > 0.03
+
+
 def test_bias_update_ignores_invalid_samples():
     n = 1600
     imu = synthetic(n, gyro=(0.02, 0.0, 0.0))

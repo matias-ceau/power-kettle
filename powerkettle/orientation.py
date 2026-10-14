@@ -96,33 +96,48 @@ def _static_stretch(q_prev, dq, f_hat, rate):
 
 
 def working_bias(imu: ImuData, bias0: np.ndarray, static: np.ndarray, start: int = 0,
-                 min_seconds: float = 1.0) -> np.ndarray:
-    """(N, 3) gyro bias used for integration: `bias0`, replaced from the start of every static
-    run lasting >= `min_seconds` by the mean raw gyro over that run (valid samples only).
-    Runs ending at or before sample `start` are ignored."""
+                 min_seconds: float = 1.0, max_std: float = 0.01,
+                 max_jump: float = 0.03) -> np.ndarray:
+    """(N, 3) gyro bias used for integration: `bias0`, replaced from the start of every accepted
+    static run by the mean raw gyro over that run (valid, finite samples only), until the next
+    accepted run. A static run is accepted if it lasts >= `min_seconds`, the per-axis std of the
+    raw gyro over it is < `max_std` (rad/s) and its mean lies within `max_jump` (rad/s, vector
+    norm) of the bias in force; otherwise a slow genuine rotation would be absorbed as bias.
+    Runs ending at or before sample `start` are ignored. Offline: the mean is applied from the
+    start of the run, so it uses samples later than the ones it corrects."""
     n = len(imu.t)
     bias = np.tile(np.asarray(bias0, float), (n, 1))
     need = max(1, int(math.ceil(min_seconds * imu.fs - 1e-9)))
     good = imu.valid & np.all(np.isfinite(imu.gyro), axis=1)
-    runs = [(a, b) for a, b in zip(*_runs(static)) if b - a >= need and b > start]
-    for i, (a, b) in enumerate(runs):
-        sel = good[a:b]
-        if not sel.any():
+    current = np.asarray(bias0, float).copy()
+    seg_start = 0
+    for a, b in zip(*_runs(static)):
+        if b - a < need or b <= start:
             continue
-        end = runs[i + 1][0] if i + 1 < len(runs) else n
-        bias[a:end] = imu.gyro[a:b][sel].mean(axis=0)
+        w = imu.gyro[a:b][good[a:b]]
+        if len(w) == 0 or np.any(w.std(axis=0) >= max_std):
+            continue
+        mean = w.mean(axis=0)
+        if np.linalg.norm(mean - current) >= max_jump:
+            continue
+        bias[seg_start:a] = current
+        current, seg_start = mean, a
+    bias[seg_start:] = current
     return bias
 
 
 def estimate_orientation(imu: ImuData, calib: Calibration, gain: float = 2.0,
-                         bias_update_min_s: float = 1.0, return_bias: bool = False):
+                         bias_update_min_s: float = 1.0, bias_max_std: float = 0.01,
+                         bias_max_jump: float = 0.03, return_bias: bool = False):
     """(N, 4) world <- sensor orientation, scalar-first; with `return_bias` also the (N, 3)
     working gyro bias that was subtracted at each sample.
 
-    The gyro bias starts at `calib.gyro_bias` and is re-estimated online: whenever a static
-    window lasts at least `bias_update_min_s` seconds, the mean raw gyro over that window
-    replaces it from the window's start (the true rate of a still bell is zero), so drift of
-    the bias between sets is absorbed.
+    The gyro bias starts at `calib.gyro_bias` and is re-estimated offline (non-causally): a
+    static window lasting at least `bias_update_min_s` seconds, with per-axis raw-gyro std below
+    `bias_max_std` and a mean within `bias_max_jump` (rad/s) of the bias in force, replaces it
+    by that window mean, applied from the window's start (the true rate of a still bell is
+    zero). This absorbs bias drift between sets; windows failing the std/jump checks (slow
+    genuine rotation) are ignored.
 
     Starts from `calib.q0` at the start of the calibration window (earlier samples hold it) and
     integrates the bias-corrected gyro. Where `static_mask` is set, the tilt is corrected towards
@@ -138,7 +153,8 @@ def estimate_orientation(imu: ImuData, calib: Calibration, gain: float = 2.0,
         return (q, np.tile(np.asarray(calib.gyro_bias, float), (n, 1))) if return_bias else q
 
     static_all = static_mask(imu)
-    bias = working_bias(imu, calib.gyro_bias, static_all, s0, bias_update_min_s)
+    bias = working_bias(imu, calib.gyro_bias, static_all, s0, bias_update_min_s,
+                        bias_max_std, bias_max_jump)
     omega = imu.gyro - bias
     ok = imu.valid & np.all(np.isfinite(omega), axis=1)
     ok_s = ok[s0:]
