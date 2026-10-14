@@ -10,7 +10,7 @@ from powerkettle.calibration import CalibrationError
 from powerkettle.live import CONTEXT_S, MAX_WINDOW_S, LiveAnalyser
 from powerkettle.pipeline import AnalysisConfig, analyse_run
 from powerkettle.rawlog import Run
-from powerkettle.simulate import Hold, PartialRep, Rest, SimConfig, Snatch, Swing, simulate
+from powerkettle.simulate import Hold, PartialRep, Rest, SimConfig, Snatch, Swing, crop, simulate
 
 CHUNK = 19  # samples per BLE packet
 BLOCK = [Snatch(10, "L"), Rest(25), Swing(15), Rest(25), Snatch(10, "R"), Hold(3), Rest(25)]
@@ -280,3 +280,32 @@ def test_bell_parked_turned_live(yaws):
     run, truth = simulate([Rest(3, yaw_deg=cal), Swing(6), Rest(5, yaw_deg=mid),
                            Snatch(5, "L"), Rest(3, yaw_deg=end)])
     live_matches_batch(run, truth)
+
+
+def test_reps_before_calibration_window_live():
+    """The recording starts moving: the reps before the first still window are reported once it
+    is found (orientation integrated backwards from it), matching the batch result; the
+    calibration event carries the warning."""
+    run, truth = simulate([Rest(0.5), Swing(6), Rest(3), Swing(6), Rest(3)])
+    events, batch = live_matches_batch(run, truth)
+    cal = events[0][1]
+    assert cal["type"] == "calibration" and cal["ok"] is True
+    assert any("before the calibration window" in w for w in cal["warnings"])
+    assert len(of_type(events, "rep")) == 12
+
+
+def test_prior_calibration_mounting_live():
+    """A reconnect with the previous run's calibration: live and finish use its mounting."""
+    run, truth = simulate([Rest(3), Swing(8), Rest(4), Swing(5), Rest(3)])
+    prior = analyse_run(run).calib
+    tr = truth.reps[4]
+    run2, truth2 = crop(run, truth, (tr.i_low + tr.i_top) // 2 / truth.fs_true)
+    live = live_for(run2, prior_calib=prior)
+    events, _ = feed_all(live, run2)
+    batch = analyse_run(run2, prior_calib=prior)
+    reps, ref = [e for _, e in of_type(events, "rep")], batch_reps(batch)
+    assert [e["kind"] for e in reps] == [r.kind for r in ref] == [t.kind for t in truth2.reps]
+    for j, (e, r) in enumerate(zip(reps, ref)):
+        assert e["power_w"] == pytest.approx(r.power_w, rel=0.01), j
+    assert np.array_equal(live.finish().calib.up_s, prior.up_s)
+    assert live.finish().summary() == batch.summary()

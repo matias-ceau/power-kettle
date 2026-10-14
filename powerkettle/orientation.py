@@ -171,10 +171,12 @@ def estimate_orientation(imu: ImuData, calib: Calibration, gain: float = 2.0,
     zero). This absorbs bias drift between sets; windows failing the std/jump checks (slow
     genuine rotation) are ignored.
 
-    Starts from `calib.q0` at the start of the calibration window (earlier samples hold it) and
-    integrates the bias-corrected gyro. Where `static_mask` is set, the tilt is corrected towards
-    the measured gravity direction at rate `gain` (rad/s, per rad of tilt error; a step is capped
-    at the full error).
+    Starts from `calib.q0` at the start of the calibration window and integrates the
+    bias-corrected gyro forwards from it and, over the samples before it (a recording that
+    starts moving, or a reconnect), backwards to the first sample, with the bias in force at the
+    window. Where `static_mask` is set, the tilt is corrected towards the measured gravity
+    direction at rate `gain` (rad/s, per rad of tilt error; a step is capped at the full error),
+    in both directions.
 
     Gaps: for integration only, the bias-corrected gyro is interpolated (cubic Hermite,
     ``_bridge_gaps``) across a run of invalid or missing samples between the valid samples on
@@ -186,8 +188,8 @@ def estimate_orientation(imu: ImuData, calib: Calibration, gain: float = 2.0,
     dt = 1.0 / imu.fs
     s0 = min(max(int(calib.still.start or 0), 0), n - 1)
     q = np.empty((n, 4))
-    q[: s0 + 1] = quat.normalize(calib.q0)
-    if n == 1 or s0 == n - 1:
+    q[s0] = quat.normalize(calib.q0)
+    if n == 1:
         return (q, np.tile(np.asarray(calib.gyro_bias, float), (n, 1))) if return_bias else q
 
     static_all = static_mask(imu)
@@ -196,21 +198,30 @@ def estimate_orientation(imu: ImuData, calib: Calibration, gain: float = 2.0,
     omega = imu.gyro - bias
     ok = imu.valid & np.all(np.isfinite(omega), axis=1)
     omega, ok = _bridge_gaps(omega, ok, imu.fs, gap_interp_max_s)
-    ok_s = ok[s0:]
-    dq = _delta_quaternions(omega[s0:], ok_s[:-1] & ok_s[1:], dt)  # dq[j]: sample s0+j -> s0+j+1
-    static = static_all[s0 + 1:]  # applies to the sample each step lands on
+    dq = _delta_quaternions(omega, ok[:-1] & ok[1:], dt)  # dq[j]: sample j -> j+1
     with np.errstate(invalid="ignore", divide="ignore"):
-        f_hat = imu.acc[s0 + 1:] / np.linalg.norm(imu.acc[s0 + 1:], axis=1, keepdims=True)
+        f_hat = imu.acc / np.linalg.norm(imu.acc, axis=1, keepdims=True)
     rate = min(gain * dt, 1.0)
+    # forwards: step j lands on sample s0 + 1 + j; backwards: step j lands on s0 - 1 - j
+    q[s0 + 1:] = _integrate(q[s0], dq[s0:], static_all[s0 + 1:], f_hat[s0 + 1:], rate)
+    if s0 > 0:
+        back = quat.conj(dq[s0 - 1::-1])
+        q[s0 - 1::-1] = _integrate(q[s0], back, static_all[s0 - 1::-1], f_hat[s0 - 1::-1], rate)
+    return (q, bias) if return_bias else q
 
+
+def _integrate(q0: np.ndarray, dq: np.ndarray, static: np.ndarray, f_hat: np.ndarray,
+               rate: float) -> np.ndarray:
+    """(m, 4) orientations after each step dq[j] (right-multiplied) from `q0`, levelled towards
+    `f_hat[j]` where `static[j]` (both apply to the sample the step lands on)."""
+    out = np.empty((len(dq), 4))
     starts, stops = _runs(static)
     bounds = sorted({0, len(static), *starts.tolist(), *stops.tolist()})
+    prev = q0
     for a, b in zip(bounds[:-1], bounds[1:]):
-        prev = q[s0 + a]  # orientation of the sample before this stretch (step index a)
         if static[a]:
-            q[s0 + a + 1: s0 + b + 1] = _static_stretch(
-                prev, dq[a:b].tolist(), f_hat[a:b].tolist(), rate)
+            out[a:b] = _static_stretch(prev, dq[a:b].tolist(), f_hat[a:b].tolist(), rate)
         else:
-            q[s0 + a + 1: s0 + b + 1] = quat.normalize(
-                quat.mul(prev, _cumulative_product(dq[a:b])))
-    return (q, bias) if return_bias else q
+            out[a:b] = quat.normalize(quat.mul(prev, _cumulative_product(dq[a:b])))
+        prev = out[b - 1]
+    return out

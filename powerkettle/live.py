@@ -40,7 +40,11 @@ Events (JSON-safe dicts, in this order)
 - ``{"type": "calibration", "ok": True, "warnings": [...]}`` once, when the first still window
   is found (``ok`` False, with the reason as the only warning, if that window cannot calibrate,
   e.g. |f| far off g; nothing else follows then and ``finish`` raises like ``analyse_run``).
-  Without a still window there is no event; ``finish`` raises ``CalibrationError``.
+  Without a still window there is no event; ``finish`` raises ``CalibrationError`` (or, with
+  `prior_calib`, analyses the run with it, as ``analyse_run``). The samples before the window
+  are analysed too (orientation integrated backwards from it): their reps are reported at the
+  first ticks after the event, which then carries the warning saying how long they last. With
+  `prior_calib` (a reconnect), its mounting is kept, as in ``analyse_run``.
 - ``{"type": "set_start", "set": k, "t": s}`` just before the first rep of set k (0-based, as
   ``SessionResult.sets``); ``t`` (s since the first sample) is when the bell left the floor. It
   is not sent when the bell leaves the floor, since a set without reps (picked up and put down)
@@ -97,14 +101,29 @@ import numpy as np
 
 from .anchors import Anchor, StretchMotion, _static_windows, motion_sums, sagittal_tilt
 from .bell import BellProfile
-from .calibration import SMOOTH_SECONDS, Calibration, CalibrationError, calibrate, find_still_window
+from .calibration import (
+    SMOOTH_SECONDS,
+    Calibration,
+    CalibrationError,
+    calibrate,
+    find_still_window,
+    with_mounting,
+)
 from .classify import classify, rep_features
 from .imu import GAP_GUARD_SAMPLES, G, ImuData, scale_run
 from .integrate import power, segment_position, segment_velocity
 from .metrics import set_metrics
 from .orientation import GAP_INTERP_MAX_S, static_mask
 from .paths import athlete_forward, rep_path
-from .pipeline import AnalysisConfig, Motion, SessionResult, _jsonable, analyse_run, motion_stages
+from .pipeline import (
+    AnalysisConfig,
+    Motion,
+    SessionResult,
+    _jsonable,
+    analyse_run,
+    motion_stages,
+    pre_calibration_warning,
+)
 from .rawlog import Run
 from .reps import Rep, SetResult, rep_metrics
 
@@ -131,8 +150,10 @@ class LiveAnalyser:
     ``finish`` analyses (False adds the nominal-rate warning)."""
 
     def __init__(self, bell: BellProfile, cfg: AnalysisConfig, rate_hz: float, acc_range_g: int,
-                 gyro_range_dps: int, rate_estimated: bool = False) -> None:
+                 gyro_range_dps: int, rate_estimated: bool = False,
+                 prior_calib: Calibration | None = None) -> None:
         self.bell, self.cfg = bell, cfg
+        self.prior_calib = prior_calib
         self.rate_hz = float(rate_hz)
         self.acc_range_g, self.gyro_range_dps = acc_range_g, gyro_range_dps
         self.rate_estimated = rate_estimated
@@ -213,7 +234,7 @@ class LiveAnalyser:
         run = Run(self._first + rows.astype(np.int64), self._raw[:n][rows], list(self._gaps), [],
                   self.rate_hz, self.acc_range_g, self.gyro_range_dps,
                   rate_estimated=self.rate_estimated)
-        return analyse_run(run, self.bell, self.cfg)
+        return analyse_run(run, self.bell, self.cfg, prior_calib=self.prior_calib)
 
     def _grow(self, rows: int) -> None:
         if rows <= self._cap:
@@ -275,9 +296,12 @@ class LiveAnalyser:
         except CalibrationError as e:
             self._failed = True
             return [{"type": "calibration", "ok": False, "warnings": [str(e)]}]
+        if self.prior_calib is not None:
+            self._calib = with_mounting(self._calib, self.prior_calib)
         self._acc_k = G / self._calib.g_measured  # as pipeline.analyse_run (correct_acc_scale)
         self._acc[:self._n] *= self._acc_k
-        return [{"type": "calibration", "ok": True, "warnings": list(self._calib.warnings)}]
+        warnings = self._calib.warnings + pre_calibration_warning(self._calib, self.rate_hz)
+        return [{"type": "calibration", "ok": True, "warnings": warnings}]
 
     def _process(self) -> list[dict]:
         w0, n = self._w0, self._n

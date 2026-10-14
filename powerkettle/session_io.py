@@ -12,8 +12,9 @@ Keys
 
 ``calibration`` (``calibration_to_dict``) is the calibration the run was analysed with, with a
 ``carried`` flag: a run without a still window (after a reconnect) is analysed with the previous
-run's calibration, which cannot be rebuilt from its own samples, so ``reanalyse`` passes it back
-to ``analyse_run`` as ``prior_calib`` (used only when the run cannot calibrate itself).
+run's calibration, which cannot be rebuilt from its own samples, and a later run keeps the first
+run's mounting, so ``reanalyse`` passes it back to ``analyse_run`` as ``prior_calib`` (its
+mounting is kept; gyro bias and q0 are re-derived from the run's own still window if any).
 
 Conventions for the meta written by the CLI: ``labels`` maps the rep index (JSON string key) to
 ``{"kind", "hand"}``; ``markers`` is a list of ``{"phone_ms", "text", "sample_index"}``, the

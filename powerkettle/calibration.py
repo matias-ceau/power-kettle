@@ -24,6 +24,7 @@ from .imu import G, ImuData
 SMOOTH_SECONDS = 0.1  # averaging length of the per-sample stillness test (suppresses noise)
 G_ERROR_MAX = 0.10  # fraction of g; beyond this |f| at rest is a scale/range error, not a warning
 MIN_OUT_PERP = 0.1  # |out - (out.up) up| below this: outward axis is (anti)parallel to up
+SEED_SECONDS = 0.5  # q0 of a run without a still window: gravity averaged over this much
 
 
 class CalibrationError(ValueError):
@@ -99,6 +100,36 @@ def find_still_window(imu: ImuData, cfg: CalibrationConfig = CalibrationConfig()
         f"no still window of {cfg.still_seconds:.1f} s found (|gyro| < {cfg.gyro_still_max} rad/s, "
         f"|acc| steady within {100 * cfg.acc_still_tol:.0f} %): start the recording with the bell "
         "standing still on the floor")
+
+
+def with_mounting(calib: Calibration, prior: Calibration) -> Calibration:
+    """`calib` (from its own still window) with the mounting of `prior` (a previous run of the
+    session: up_s, out_s, lever_arm_s, which do not change while the box stays on the bell);
+    q0 is rebuilt from the window's gravity direction (``calib.up_s``) and prior's out_s."""
+    return dataclasses.replace(
+        calib, up_s=np.array(prior.up_s, float), out_s=np.array(prior.out_s, float),
+        lever_arm_s=np.array(prior.lever_arm_s, float),
+        q0=_initial_orientation(calib.up_s, np.asarray(prior.out_s, float)))
+
+
+def seeded_from_prior(imu: ImuData, prior: Calibration, static: np.ndarray) -> Calibration:
+    """A calibration for a run without a still window, from a previous run's `prior`: its
+    mounting, gyro bias and |g|; q0 levelled on the mean specific-force direction over the first
+    run of `static` samples (at most SEED_SECONDS of it; heading from prior's out_s) and
+    ``still`` = that run's first sample, or, without static samples, prior's q0 at sample 0."""
+    starts, stops = _true_runs(static)
+    if len(starts) == 0:
+        return dataclasses.replace(prior, still=slice(0, 1), warnings=[])
+    a = int(starts[0])
+    b = min(int(stops[0]), a + max(1, int(round(SEED_SECONDS * imu.fs))))
+    f = np.nanmean(imu.acc[a:b], axis=0)
+    q0 = _initial_orientation(f / np.linalg.norm(f), np.asarray(prior.out_s, float))
+    return dataclasses.replace(prior, q0=q0, still=slice(a, a + 1), warnings=[])
+
+
+def _true_runs(mask: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    edges = np.diff(np.concatenate([[0], np.asarray(mask, np.int8), [0]]))
+    return np.flatnonzero(edges == 1), np.flatnonzero(edges == -1)
 
 
 def correct_acc_scale(imu: ImuData, calib: Calibration) -> ImuData:

@@ -4,7 +4,8 @@
     python -m powerkettle analyse FILE(.pkraw|.npz) [--bell bell.json] [--out out.npz]
 
 ``analyse`` runs ``pipeline.analyse_run`` on every run of the recording (a Bluetooth reconnect
-starts a new run; a run without a still window reuses the previous run's calibration) and prints
+starts a new run; later runs keep the previous run's mounting, and a run without a still window
+reuses its calibration, see ``analyse_run``) and prints
 one line per set and a rep table. Each set line shows the nearest marker at or before the set's
 start, so a set with no new marker since the previous one repeats it. A ``.npz`` session
 brings its own bell, labels and markers (stored with their sample index); ``--bell``

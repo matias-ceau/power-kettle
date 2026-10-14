@@ -48,13 +48,15 @@ from .calibration import (
     CalibrationError,
     calibrate,
     correct_acc_scale,
+    seeded_from_prior,
+    with_mounting,
 )
 from .classify import ClassifierConfig
 from .imu import ImuData, scale_run
 from .integrate import power, segment_position, segment_velocity
 from .kinematics import Kinematics, com_acceleration
 from .metrics import SessionMetrics, SetMetrics, session_metrics, set_metrics
-from .orientation import estimate_orientation
+from .orientation import estimate_orientation, static_mask
 from .paths import athlete_forward, rep_path
 from .rawlog import Run
 from .reps import Rep, SetResult, build_sets, segment_sets
@@ -64,6 +66,36 @@ KINDS = ("snatch", "swing", "other")
 SNATCH_HANDS = ("L", "R", "?")  # a snatch's hand; swing and other always have "-"
 WARN_NOMINAL_RATE = "sample rate nominal (no status data)"
 WARN_CARRIED_CALIBRATION = "calibration carried over from previous run"
+PRE_CALIBRATION_WARN_S = 1.0  # more data than this before the calibration window: warning
+
+
+def pre_calibration_warning(calib: Calibration, fs: float) -> list[str]:
+    """[warning] when the orientation reference (``calib.still.start``) lies more than
+    PRE_CALIBRATION_WARN_S into the run (the samples before it are integrated backwards)."""
+    s = (calib.still.start or 0) / fs
+    if s <= PRE_CALIBRATION_WARN_S:
+        return []
+    return [f"{s:.1f} s of data before the calibration window (orientation integrated "
+            "backwards from it)"]
+
+
+def calibrate_run(imu: ImuData, bell: BellProfile, ccfg: CalibrationConfig,
+                  prior: Calibration | None = None) -> tuple[Calibration, ImuData, list[str]]:
+    """(calibration, `imu` with the accelerometer scale corrected, warnings) of a run (see
+    ``analyse_run``)."""
+    warnings: list[str] = []
+    try:
+        calib = calibrate(imu, bell, ccfg)
+        if prior is not None:
+            calib = with_mounting(calib, prior)
+        imu = correct_acc_scale(imu, calib)
+    except CalibrationError:
+        if prior is None:
+            raise
+        imu = correct_acc_scale(imu, prior)
+        calib = seeded_from_prior(imu, prior, static_mask(imu))
+        warnings.append(WARN_CARRIED_CALIBRATION)
+    return calib, imu, warnings + calib.warnings + pre_calibration_warning(calib, imu.fs)
 
 
 @dataclass
@@ -212,22 +244,20 @@ def _apply_labels(reps: list[Rep], labels: dict) -> None:
 def analyse_run(run: Run, bell: BellProfile = BellProfile(),
                 cfg: AnalysisConfig = AnalysisConfig(), labels: dict | None = None,
                 prior_calib: Calibration | None = None) -> SessionResult:
-    """Analyse one run (every stage of spec §5–7). Raises ``CalibrationError`` when the run has
-    no still window and no `prior_calib` is given; with one, it is used instead (its still
-    window moved to the run's first sample) and a warning is added."""
+    """Analyse one run (every stage of spec §5–7).
+
+    Calibration: from the run's first still window. `prior_calib` is the calibration of a
+    previous run of the session (a reconnect): its mounting (up_s, out_s, lever_arm_s) is kept
+    and only gyro bias and q0 come from the run's still window (``with_mounting``); without a
+    still window, its gyro bias and |g| too, with q0 levelled on the first static samples
+    (``seeded_from_prior``; prior's q0 at sample 0 if there are none) and a warning. Raises
+    ``CalibrationError`` when the run has no still window and no `prior_calib` is given. The
+    orientation is integrated backwards over the samples before that reference (reps before
+    the first rest are analysed); beyond 1 s a warning says how long they last."""
     imu = scale_run(run)
-    warnings: list[str] = []
-    try:
-        calib = calibrate(imu, bell, cfg.calibration)
-    except CalibrationError:
-        if prior_calib is None:
-            raise
-        calib = dataclasses.replace(prior_calib, still=slice(0, 1), warnings=[])
-        warnings.append(WARN_CARRIED_CALIBRATION)
-    warnings += calib.warnings
+    calib, imu, warnings = calibrate_run(imu, bell, cfg.calibration, prior_calib)
     if not run.rate_estimated:
         warnings.append(WARN_NOMINAL_RATE)
-    imu = correct_acc_scale(imu, calib)
 
     m = motion_stages(imu, calib, bell, cfg)
     q, v, pos, anchors = m.q, m.v, m.pos, m.anchors

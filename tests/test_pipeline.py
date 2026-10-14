@@ -10,6 +10,7 @@ from powerkettle.bell import BellProfile
 from powerkettle.calibration import CalibrationError
 from powerkettle.pipeline import (
     ALGORITHM_VERSION,
+    WARN_CARRIED_CALIBRATION,
     AnalysisConfig,
     SessionResult,
     analyse_run,
@@ -17,7 +18,7 @@ from powerkettle.pipeline import (
 )
 from powerkettle.rawlog import RawRecord, Run, write_rawlog
 from powerkettle.session_io import load_session, reanalyse, save_session
-from powerkettle.simulate import Rest, SimConfig, Snatch, Swing, simulate
+from powerkettle.simulate import Rest, SimConfig, Snatch, Swing, crop, simulate
 
 SESSION = [Rest(3), Snatch(8, "L"), Rest(6), Swing(10), Rest(6), Snatch(8, "R"), Rest(3)]
 SAT_REP = 5
@@ -343,3 +344,83 @@ def test_bell_parked_turned(yaws):
         assert np.nanmax(r.path[:, 2]) == pytest.approx(r.apex_m, abs=0.02)
     swing = reps_of(res)[0]
     assert swing.path[np.nanargmax(swing.path[:, 2]), 0] > 0.6  # the swing top is in front
+
+
+# ----------------------------------------------------------------------------- I3: calibration
+def test_reps_before_the_calibration_window():
+    """The recording starts moving (0.5 s on the floor, then 6 swings): the first still window
+    comes after the first set; the samples before it are analysed (orientation integrated
+    backwards) and a warning says how long they last."""
+    run, truth = simulate([Rest(0.5), Swing(6), Rest(3), Swing(6), Rest(3)])
+    res = analyse_run(run)
+    assert [r.kind for r in reps_of(res)] == [t.kind for t in truth.reps] == ["swing"] * 12
+    s0 = res.calib.still.start / run.rate_hz
+    assert s0 > 8.0
+    assert f"{s0:.1f} s of data before the calibration window" in " ".join(res.warnings)
+    for kind, st in res.metrics.by_kind.items():
+        assert st.avg == pytest.approx(np.mean([t.power_w for t in truth.reps]), rel=0.02)
+    plain = analyse_run(simulate([Rest(3), Swing(2), Rest(3)])[0])
+    assert not any("before the calibration" in w for w in plain.warnings)
+
+
+RECONNECT = [Rest(3), Swing(12), Rest(5), Swing(10), Rest(3)]
+
+
+@pytest.fixture(scope="module")
+def reconnect():
+    """The session, its analysis and the same session reconnected in the middle of rep 6."""
+    run, truth = simulate(RECONNECT)
+    tr = truth.reps[6]
+    return run, truth, analyse_run(run), (tr.i_low + tr.i_top) // 2 / truth.fs_true
+
+
+@pytest.mark.parametrize("with_prior", [True, False])
+def test_reconnect_mid_set_with_a_later_rest(reconnect, with_prior):
+    """A run that starts mid-set (a reconnect) and holds a rest later: every rep after the cut
+    is found, with or without the previous run's calibration."""
+    run, truth, first, start_s = reconnect
+    run2, truth2 = crop(run, truth, start_s)
+    res = analyse_run(run2, prior_calib=first.calib if with_prior else None)
+    assert len(truth2.reps) == 15
+    assert [r.kind for r in reps_of(res)] == [t.kind for t in truth2.reps]
+    for r, t in zip(reps_of(res), truth2.reps):
+        assert r.apex_m == pytest.approx(t.apex_m, abs=0.05)
+    got = [r.power_w for r in reps_of(res)]
+    assert np.mean(got) == pytest.approx(np.mean([t.power_w for t in truth2.reps]), rel=0.02)
+
+
+def test_prior_calibration_keeps_mounting(reconnect):
+    """With a prior calibration, its mounting (up_s, out_s, lever arm) is kept; gyro bias and
+    q0 come from the run's own still window."""
+    run, truth, first, start_s = reconnect
+    run2, _ = crop(run, truth, start_s)
+    prior = dataclasses.replace(first.calib, gyro_bias=first.calib.gyro_bias + 0.01)
+    res = analyse_run(run2, prior_calib=prior)
+    own = analyse_run(run2)
+    for name in ("up_s", "out_s", "lever_arm_s"):
+        assert np.array_equal(getattr(res.calib, name), getattr(prior, name)), name
+    assert res.calib.gyro_bias == pytest.approx(own.calib.gyro_bias)
+    assert res.calib.still == own.calib.still
+    assert WARN_CARRIED_CALIBRATION not in res.warnings
+
+
+def test_reconnect_mid_swing_without_still_window(reconnect):
+    """A run that starts just before a swing top (bell-up ~80° from vertical) and holds no still
+    window at all (the set ends with a 1.5 s rest): with the previous run's calibration
+    (mounting and gyro bias), q0 is seeded at the first static samples and integrated
+    backwards, so every rep after the cut is found with its apex and top tilt."""
+    run, truth = simulate([Rest(3), Swing(12), Rest(1.5)])
+    first = analyse_run(run)
+    tr = truth.reps[5]
+    run2, truth2 = crop(run, truth, (tr.i_top - 40) / truth.fs_true)
+    with pytest.raises(CalibrationError):
+        analyse_run(run2)
+    res = analyse_run(run2, prior_calib=first.calib)
+    assert WARN_CARRIED_CALIBRATION in res.warnings
+    assert len(truth2.reps) == 6
+    assert [r.kind for r in reps_of(res)] == [t.kind for t in truth2.reps]
+    for r, t in zip(reps_of(res), truth2.reps):
+        assert r.apex_m == pytest.approx(t.apex_m, abs=0.05)
+        assert r.features["top_tilt_deg"] == pytest.approx(90.0, abs=3.0)
+    got = [r.power_w for r in reps_of(res)]
+    assert np.mean(got) == pytest.approx(np.mean([t.power_w for t in truth2.reps]), rel=0.02)

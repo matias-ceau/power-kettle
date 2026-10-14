@@ -282,3 +282,31 @@ def test_gap_bridge_threshold_and_ramp(n_bad, bridged):
         assert np.allclose(q, ref, atol=1e-9)
     else:
         assert np.allclose(q[299:300 + n_bad], q[299])
+
+
+def test_samples_before_calibration_integrated_backwards():
+    """The recording starts moving: the first still window follows a swing set. The samples
+    before it are integrated backwards from it (gyro, and the static correction where static),
+    so their tilt is right too (they used to hold q0)."""
+    run, truth = simulate([Rest(0.5), Swing(6), Rest(3), Swing(2), Rest(2)], BELL)
+    imu = scale_run(run)
+    cal = calibrate(imu, BELL)
+    s0 = cal.still.start
+    assert s0 > 3 * imu.fs
+    q = estimate_orientation(imu, cal)
+    err = np.degrees(tilt_error(q, truth.quat_ws))
+    assert err[:s0].max() < 2.0, f"max tilt error before calibration {err[:s0].max():.2f} deg"
+    assert err.max() < 2.0
+
+
+def test_backward_integration_exact():
+    """Constant rate, calibration window at the end: the start is q0 rotated back exactly."""
+    n = 2001
+    w = np.array([0.3, -0.2, 0.9])
+    imu = synthetic(n, gyro=w, acc=(0.0, 0.0, 3 * G))  # never static
+    cal = dataclasses.replace(types_cal(np.zeros(3), np.array([1.0, 0.0, 0.0, 0.0])),
+                              still=slice(n - 1, n))
+    q = estimate_orientation(imu, cal)
+    expect = quat.conj(quat.from_axis_angle(w, np.linalg.norm(w) * (n - 1) / imu.fs))
+    assert quat.angle_between(quat.rotate(q[0], [1, 0, 0]), quat.rotate(expect, [1, 0, 0])) < 1e-9
+    assert np.allclose(q[-1], [1.0, 0.0, 0.0, 0.0])
