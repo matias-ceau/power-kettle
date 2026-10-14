@@ -130,16 +130,20 @@ def rest_forward(quats: np.ndarray, calib: Calibration, rest: Anchor,
 
 
 def _forward_chain(quats: np.ndarray, calib: Calibration, rests: list[tuple[int, int]],
-                   upright_max_deg: float) -> tuple[np.ndarray, list[np.ndarray]]:
-    """Forward of the calibration window, then of each rest (i0, i1) in order: the rest's own
-    axis with its sign kept continuous with the previous forward; the previous forward where the
-    rest gives none (bell not upright)."""
+                   upright_max_deg: float,
+                   first: np.ndarray | None = None) -> tuple[np.ndarray, list[np.ndarray]]:
+    """Forward of the calibration window (or `first`, when given), then of each rest (i0, i1)
+    in order: the rest's own axis with its sign kept continuous with the previous forward; the
+    previous forward where the rest gives none (bell not upright)."""
     still = calib.still
-    try:
-        prev = _window_forward(quats, calib, int(still.start or 0), int(still.stop) - 1,
-                               upright_max_deg)
-    except ValueError:
-        prev = np.array([1.0, 0.0, 0.0])  # calibration defines world +x as forward
+    if first is not None:
+        prev = np.asarray(first, dtype=float)
+    else:
+        try:
+            prev = _window_forward(quats, calib, int(still.start or 0), int(still.stop) - 1,
+                                   upright_max_deg)
+        except ValueError:
+            prev = np.array([1.0, 0.0, 0.0])  # calibration defines world +x as forward
     first = prev
     chain = []
     for i0, i1 in rests:
@@ -218,8 +222,12 @@ def _lows(th: np.ndarray, f_ok: np.ndarray, held: np.ndarray, min_prom: float) -
 
 
 def detect_anchors(imu: ImuData, quats: np.ndarray, kin: Kinematics, calib: Calibration,
-                   cfg: AnchorConfig = AnchorConfig()) -> list[Anchor]:
+                   cfg: AnchorConfig = AnchorConfig(),
+                   forward0: np.ndarray | None = None) -> list[Anchor]:
     """Rests, lows, swing tops and lockouts, sorted by position.
+
+    `forward0` (unit, horizontal) replaces the calibration window's forward as the forward in
+    force at sample 0, for data that starts after the calibration window (``live``).
 
     1. Static windows (`static_mask`) of at least `static_min_s`: a rest if the tremor-band RMS of
        f (`tremor_rms`) is at most `tremor_rms_max` and it lasts `rest_min_s`; otherwise hand-held.
@@ -239,7 +247,7 @@ def detect_anchors(imu: ImuData, quats: np.ndarray, kin: Kinematics, calib: Cali
     f_ok = _f_gate(kin.f_norm, imu.valid, max(0, round(LOW_GATE_HALF_S * imu.fs)),
                    cfg.low_min_f_g * G)
     first, chain = _forward_chain(quats, calib, [(a, b - 1) for a, b in rests],
-                                  cfg.forward_upright_max_deg)
+                                  cfg.forward_upright_max_deg, forward0)
 
     anchors = [Anchor(a, b - 1, "rest") for a, b in rests]
     bounds = [0] + [x for a, b in rests for x in (a, b)] + [n]

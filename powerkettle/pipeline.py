@@ -31,13 +31,13 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
-from .anchors import AnchorConfig, detect_anchors, refine_rests, set_forwards
+from .anchors import Anchor, AnchorConfig, detect_anchors, refine_rests, set_forwards
 from .bell import BellProfile
 from .calibration import Calibration, CalibrationConfig, CalibrationError, calibrate
 from .classify import ClassifierConfig
-from .imu import scale_run
+from .imu import ImuData, scale_run
 from .integrate import power, segment_position, segment_velocity
-from .kinematics import com_acceleration
+from .kinematics import Kinematics, com_acceleration
 from .metrics import SessionMetrics, SetMetrics, session_metrics, set_metrics
 from .orientation import estimate_orientation
 from .paths import athlete_forward, rep_path
@@ -125,6 +125,35 @@ class SessionResult:
         })
 
 
+@dataclass
+class Motion:
+    """Outputs of the stages from orientation to power (``motion_stages``)."""
+    q: np.ndarray  # (N, 4) world <- sensor
+    bias: np.ndarray  # (N, 3) working gyro bias, rad/s
+    kin: Kinematics
+    raw_anchors: list[Anchor]  # detect_anchors (rests not yet refined)
+    anchors: list[Anchor]  # after refine_rests
+    v: np.ndarray  # (N, 3) m/s
+    pos: np.ndarray  # (N, 3) m
+    P: np.ndarray  # (N,) W
+
+
+def motion_stages(imu: ImuData, calib: Calibration, bell: BellProfile, cfg: AnalysisConfig,
+                  forward0: np.ndarray | None = None) -> Motion:
+    """Orientation, COM acceleration, anchors, velocity / position, ``refine_rests``, velocity /
+    position again on the refined anchors, and power (the chain of ``analyse_run``; `forward0`
+    as in ``detect_anchors``)."""
+    q, bias = estimate_orientation(imu, calib, return_bias=True)
+    kin = com_acceleration(imu, q, calib, bias)
+    raw = detect_anchors(imu, q, kin, calib, cfg.anchors, forward0)
+    v = segment_velocity(kin.a_com, imu.t, raw)
+    pos = segment_position(v, imu.t, raw)
+    anchors = refine_rests(raw, pos, cfg.anchors)
+    v = segment_velocity(kin.a_com, imu.t, anchors)
+    pos = segment_position(v, imu.t, anchors)
+    return Motion(q, bias, kin, raw, anchors, v, pos, power(kin.a_com, v, bell.mass_kg))
+
+
 def map_markers(run: Run, markers: list[tuple[float, str]]) -> list[tuple[int, str]]:
     """(sample_index, text) per marker (see the module docstring); [] without packet times."""
     pt = np.asarray(run.packet_times, dtype=float).reshape(-1, 2)
@@ -180,17 +209,10 @@ def analyse_run(run: Run, bell: BellProfile = BellProfile(),
     if not run.rate_estimated:
         warnings.append(WARN_NOMINAL_RATE)
 
-    q, bias = estimate_orientation(imu, calib, return_bias=True)
-    kin = com_acceleration(imu, q, calib, bias)
-    anchors = detect_anchors(imu, q, kin, calib, cfg.anchors)
-    v = segment_velocity(kin.a_com, imu.t, anchors)
-    pos = segment_position(v, imu.t, anchors)
-    anchors = refine_rests(anchors, pos, cfg.anchors)
-    v = segment_velocity(kin.a_com, imu.t, anchors)
-    pos = segment_position(v, imu.t, anchors)
-    P = power(kin.a_com, v, bell.mass_kg)
+    m = motion_stages(imu, calib, bell, cfg)
+    q, v, pos, anchors = m.q, m.v, m.pos, m.anchors
 
-    sets = build_sets(anchors, imu, q, calib, v, pos, P, cfg.classifier)
+    sets = build_sets(anchors, imu, q, calib, v, pos, m.P, cfg.classifier)
     reps = [r for s in sets for r in s.reps]
     if labels:
         _apply_labels(reps, labels)
