@@ -1,0 +1,124 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 500" width="1000" height="500" role="img" aria-labelledby="t d" font-family="Helvetica, Arial, sans-serif">
+  <title id="t">Power Kettle wiring diagram</title>
+  <desc id="d">LiPo to TP4056 to slide switch to ESP32-C3 SuperMini 5V; C3 3V3, GND, GPIO6 SDA, GPIO7 SCL and GPIO3 INT1 to the BMI160; battery voltage divider from battery plus through two 100 kilohm resistors to GPIO4 and ground; BMI160 CS tied high and SAO tied low.</desc>
+  <style>
+    .bg { fill: #fbfaf6; stroke: #333; stroke-width: 1; }
+    .box { fill: #eef1f6; stroke: #222; stroke-width: 2; }
+    .part { fill: #e9edf3; stroke: #222; stroke-width: 2; }
+    .ttl { font-size: 17px; font-weight: bold; fill: #111; }
+    .lbl { font-size: 13px; fill: #111; }
+    .pin { font-size: 13px; fill: #111; font-weight: bold; }
+    .sub { font-size: 12px; fill: #333; }
+    .note { font-size: 13px; fill: #111; }
+    .w { fill: none; stroke-width: 3; stroke-linecap: round; stroke-linejoin: round; }
+    .pos { stroke: #b3261e; }
+    .gnd { stroke: #222; }
+    .sda { stroke: #1f5fbf; }
+    .scl { stroke: #1e7a3c; }
+    .int { stroke: #b4600a; }
+    .v33 { stroke: #b3261e; stroke-dasharray: none; }
+    .mid { stroke: #7b3fa0; }
+    .dot { fill: #111; }
+  </style>
+
+  <rect class="bg" x="0.5" y="0.5" width="999" height="499" rx="6"/>
+  <text class="ttl" x="20" y="26">Power Kettle wiring (red = battery/power, black = ground)</text>
+
+  <!-- LiPo -->
+  <rect class="box" x="30" y="60" width="130" height="80" rx="6"/>
+  <text class="ttl" x="45" y="92">LiPo</text>
+  <text class="sub" x="45" y="110">1S ~300 mAh</text>
+  <text class="pin" x="146" y="86" text-anchor="end">+</text>
+  <text class="pin" x="146" y="126" text-anchor="end">&#8722;</text>
+
+  <!-- TP4056 -->
+  <rect class="box" x="230" y="40" width="170" height="130" rx="6"/>
+  <text class="ttl" x="315" y="66" text-anchor="middle">TP4056</text>
+  <text class="sub" x="315" y="150" text-anchor="middle">USB-C + protection</text>
+  <text class="sub" x="315" y="164" text-anchor="middle">(charge port only)</text>
+  <text class="pin" x="238" y="86">B+</text>
+  <text class="pin" x="238" y="126">B&#8722;</text>
+  <text class="pin" x="392" y="86" text-anchor="end">OUT+</text>
+  <text class="pin" x="392" y="126" text-anchor="end">OUT&#8722;</text>
+
+  <!-- LiPo to TP4056 -->
+  <path class="w pos" d="M160 82 H230"/>
+  <path class="w gnd" d="M160 122 H230"/>
+
+  <!-- Slide switch on the + line -->
+  <path class="w pos" d="M400 82 H450"/>
+  <rect class="part" x="450" y="62" width="76" height="40" rx="6"/>
+  <text class="lbl" x="488" y="86" text-anchor="middle">slide switch</text>
+  <path class="w pos" d="M526 82 H560"/>
+
+  <!-- OUT- to GND -->
+  <path class="w gnd" d="M400 122 H560"/>
+
+  <!-- ESP32-C3 -->
+  <rect class="box" x="560" y="40" width="160" height="340" rx="6"/>
+  <text class="ttl" x="640" y="270" text-anchor="middle">ESP32-C3</text>
+  <text class="sub" x="640" y="288" text-anchor="middle">SuperMini</text>
+  <text class="sub" x="640" y="304" text-anchor="middle">(USB-C = flashing)</text>
+  <text class="pin" x="568" y="86">5V</text>
+  <text class="pin" x="568" y="126">GND</text>
+  <text class="pin" x="568" y="326">GPIO4</text>
+  <text class="pin" x="712" y="86" text-anchor="end">3V3</text>
+  <text class="pin" x="712" y="126" text-anchor="end">GND</text>
+  <text class="pin" x="712" y="166" text-anchor="end">GPIO6</text>
+  <text class="pin" x="712" y="206" text-anchor="end">GPIO7</text>
+  <text class="pin" x="712" y="246" text-anchor="end">GPIO3</text>
+
+  <!-- BMI160 -->
+  <rect class="box" x="840" y="40" width="140" height="340" rx="6"/>
+  <text class="ttl" x="910" y="364" text-anchor="middle">BMI160</text>
+  <text class="pin" x="848" y="86">3V3</text>
+  <text class="pin" x="848" y="126">GND</text>
+  <text class="pin" x="848" y="166">SDA</text>
+  <text class="pin" x="848" y="206">SCL</text>
+  <text class="pin" x="848" y="246">INT1</text>
+  <text class="pin" x="848" y="286">CS</text>
+  <text class="pin" x="848" y="326">SAO</text>
+
+  <!-- C3 to BMI160 -->
+  <path class="w v33" d="M720 82 H840"/>
+  <path class="w gnd" d="M720 122 H840"/>
+  <path class="w sda" d="M720 162 H840"/>
+  <path class="w scl" d="M720 202 H840"/>
+  <path class="w int" d="M720 242 H840"/>
+  <text class="sub" x="780" y="76" text-anchor="middle">3.3 V</text>
+  <text class="sub" x="780" y="156" text-anchor="middle">I&#178;C data</text>
+  <text class="sub" x="780" y="196" text-anchor="middle">I&#178;C clock</text>
+  <text class="sub" x="780" y="236" text-anchor="middle">FIFO watermark</text>
+
+  <!-- CS tied high, SAO tied low (stubs on the left side of the BMI160 board edge) -->
+  <path class="w v33" d="M840 282 H800"/>
+  <text class="sub" x="796" y="286" text-anchor="end">tie to 3V3</text>
+  <path class="w gnd" d="M840 322 H800"/>
+  <text class="sub" x="796" y="326" text-anchor="end">tie to GND</text>
+
+  <!-- Battery divider -->
+  <circle class="dot" cx="195" cy="82" r="5"/>
+  <path class="w pos" d="M195 82 V200"/>
+  <rect class="part" x="180" y="200" width="30" height="60" rx="3"/>
+  <text class="lbl" x="222" y="235">100 k&#937;</text>
+  <path class="w pos" d="M195 260 V330"/>
+  <circle class="dot" cx="195" cy="330" r="5"/>
+  <path class="w mid" d="M195 330 H560"/>
+  <text class="lbl" x="380" y="322" text-anchor="middle">midpoint = half the battery voltage</text>
+  <rect class="part" x="180" y="360" width="30" height="60" rx="3"/>
+  <text class="lbl" x="222" y="395">100 k&#937;</text>
+  <path class="w gnd" d="M195 330 V360"/>
+  <path class="w gnd" d="M195 420 V448"/>
+  <path class="w gnd" d="M175 448 H215"/>
+  <path class="w gnd" d="M183 458 H207"/>
+  <path class="w gnd" d="M191 468 H199"/>
+  <text class="lbl" x="230" y="462">to GND</text>
+  <text class="sub" x="110" y="190" text-anchor="end">battery sense</text>
+  <text class="sub" x="110" y="204" text-anchor="end">(taps B+)</text>
+
+  <!-- Notes -->
+  <text class="note" x="560" y="410">Common ground: TP4056 OUT&#8722;, both C3 GND pads and BMI160 GND.</text>
+  <text class="note" x="560" y="430">The BMI160 3V3 pin is fed from the C3 3V3 pin (not the 5V).</text>
+  <text class="note" x="560" y="450">Do not use GPIO2, GPIO8 or GPIO9 for anything.</text>
+  <text class="note" x="560" y="470">Check CS / SAO pin labels on your board's silkscreen.</text>
+</svg>
