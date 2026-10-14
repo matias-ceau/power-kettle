@@ -69,6 +69,7 @@ WARN_NOMINAL_RATE = "sample rate nominal (no status data)"
 WARN_CARRIED_CALIBRATION = "calibration carried over from previous run"
 PRE_CALIBRATION_WARN_S = 1.0  # more data than this before the calibration window: warning
 GAP_TILT_MIN_S = 0.5  # anchored segment time needed to estimate the tilt error after a gap
+GAP_TILT_STATIC_S = 0.1  # the static window closing a gap region: gravity averaged this long
 GAP_TILT_MAX_ITER = 3  # tilt corrections after a gap, each on the anchors of the previous
 GAP_TILT_STEP_DEG = 0.2  # a correction smaller than this ends the iteration
 GAP_TILT_RESIDUAL_DEG = 2.0  # tilt error still estimated after the corrections: failed
@@ -209,17 +210,38 @@ def _stages(imu: ImuData, calib: Calibration, bell: BellProfile, cfg: AnalysisCo
                   power(kin.a_com, v, bell.mass_kg), np.zeros(len(imu.t), dtype=bool))
 
 
-def _tilt_correction(m: Motion, imu: ImuData, lo: int, hi: int) -> tuple[np.ndarray, float]:
-    """(world rotation undoing the tilt error over samples [lo, hi), its angle in degrees) from
-    the mean a_com over the anchored segments from lo to hi (the first levelled sample: a
-    lockout starting there ends a segment); (identity, NaN) without enough of them."""
-    mean, dur = anchored_mean_acceleration(m.kin.a_com, imu.t, m.anchors, lo,
-                                           min(hi, len(imu.t) - 1))
-    if dur < GAP_TILT_MIN_S:
+def _tilt_correction(m: Motion, imu: ImuData, static: np.ndarray, restart: int, lo: int,
+                     hi: int) -> tuple[np.ndarray, float]:
+    """(world rotation undoing the tilt error of the gap region [lo, hi), its angle in degrees),
+    (identity, NaN) without an estimate. The error E is constant over the region, so it is read
+    where it shows best: in the static window that ends the region (forward: starting at hi;
+    backward: ending at lo), as the angle between the measured specific force turned to the
+    world, Σ R f over its first GAP_TILT_STATIC_S, and ẑ (the levelling there has barely
+    started: the iterations take up the rest); in a region still open, from the mean a_com over
+    its anchored segments (``anchored_mean_acceleration``: g (E ẑ − ẑ)) if they last
+    GAP_TILT_MIN_S."""
+    n, k = len(imu.t), max(1, round(GAP_TILT_STATIC_S * imu.fs))
+    z = np.array([0.0, 0.0, 1.0])
+    ref = None
+    if restart == lo and hi < n:  # forward region closed by a static window at hi
+        sl = slice(hi, hi + min(k, int(np.argmin(static[hi:])) or n - hi))
+        ref = "static"
+    elif restart != lo and lo > 0:  # backward region closed by a static window ending at lo
+        sl = slice(max(lo - k, int(np.flatnonzero(~static[:lo])[-1]) + 1
+                       if np.any(~static[:lo]) else 0), lo)
+        ref = "static"
+    if ref == "static":
+        f_w = quat.rotate(m.q[sl], imu.acc[sl])
+        ez = np.nanmean(f_w, axis=0)  # E ẑ, as the estimate turns measured "up"
+    else:
+        mean, dur = anchored_mean_acceleration(m.kin.a_com, imu.t, m.anchors, lo,
+                                               min(hi, n - 1))
+        if dur < GAP_TILT_MIN_S:
+            return np.array([1.0, 0.0, 0.0, 0.0]), math.nan
+        ez = z + mean / G  # E ẑ (unnormalised)
+    if not np.all(np.isfinite(ez)):
         return np.array([1.0, 0.0, 0.0, 0.0]), math.nan
-    ez = np.array([0.0, 0.0, 1.0]) + mean / G  # E ẑ (unnormalised)
-    return (quat.from_two_vectors(ez, [0.0, 0.0, 1.0]),
-            math.degrees(quat.angle_between(ez, [0.0, 0.0, 1.0])))
+    return quat.from_two_vectors(ez, z), math.degrees(quat.angle_between(ez, z))
 
 
 def motion_stages(imu: ImuData, calib: Calibration, bell: BellProfile, cfg: AnalysisConfig,
@@ -231,13 +253,14 @@ def motion_stages(imu: ImuData, calib: Calibration, bell: BellProfile, cfg: Anal
 
     Unbridged gaps (``orientation.gap_regions``): the rotation during the gap is lost, so the
     orientation after it carries a constant world-frame error E until the next static window
-    levels it. Power is unaffected (a_com + gẑ and the detrended v both turn by E), but heights
-    and tilts are not, and later reps lose their kind. The tilt part of E is read from the mean
-    a_com over the anchored segments of the region (``anchored_mean_acceleration``): if they
-    last at least GAP_TILT_MIN_S, the orientation is restarted at the region's first sample
-    with that tilt undone and the chain re-run, up to GAP_TILT_MAX_ITER times (the anchors
-    improve with the tilt). If no estimate is possible, or GAP_TILT_RESIDUAL_DEG remain, the
-    region's samples are marked ``suspect`` (reps over them get the flag "orientation").
+    levels it (and a short lockout only partly: e^(−gain·0.4 s) ≈ 45 % remains). Power is
+    unaffected (a_com + gẑ and the detrended v both turn by E), but heights and tilts are not,
+    and later reps lose their kind. The tilt part of E is estimated (``_tilt_correction``: from
+    the static window closing the region, else from the anchored segments), the orientation is
+    restarted at the region's first sample (forward; its last, backward) with that tilt undone
+    and the chain re-run, up to GAP_TILT_MAX_ITER times. If no estimate is possible, or
+    GAP_TILT_RESIDUAL_DEG remain, the region's samples are marked ``suspect`` (reps over them
+    get the flag "orientation").
     `suspect0`: the orientation at sample 0 is already suspect (``live``): so are the samples
     up to the first static one."""
     m = _stages(imu, calib, bell, cfg, forward0, motion0, None)
@@ -247,15 +270,15 @@ def motion_stages(imu: ImuData, calib: Calibration, bell: BellProfile, cfg: Anal
     for _ in range(GAP_TILT_MAX_ITER if regions else 0):
         changed = False
         for restart, lo, hi in regions:
-            c, angle = _tilt_correction(m, imu, lo, hi)
+            c, angle = _tilt_correction(m, imu, static, restart, lo, hi)
             if angle >= GAP_TILT_STEP_DEG:  # False for NaN
                 resets[restart] = quat.mul(c, m.q[restart])
                 changed = True
         if not changed:
             break
         m = _stages(imu, calib, bell, cfg, forward0, motion0, resets)
-    for _, lo, hi in regions:
-        if not _tilt_correction(m, imu, lo, hi)[1] < GAP_TILT_RESIDUAL_DEG:  # True for NaN
+    for restart, lo, hi in regions:
+        if not _tilt_correction(m, imu, static, restart, lo, hi)[1] < GAP_TILT_RESIDUAL_DEG:
             m.suspect[lo:hi] = True
             m.suspect_open |= hi == len(imu.t)
     if suspect0:
