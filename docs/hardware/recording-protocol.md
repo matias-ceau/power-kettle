@@ -39,7 +39,7 @@ the spec's are only my own earlier measurements.
 
 ## 2. Phone and device setup
 
-1. Charge the device fully and note the battery reading.
+1. Charge the device fully (through the TP4056 port, slide switch OFF) and note the battery reading.
 2. On the phone: Bluetooth and location on, battery saver off, Chrome open,
    screen timeout long. Keep the phone **within 2 to 3 m** of the bell, on a
    chair or table where it is safe from the bell (not on the floor in the

@@ -25,6 +25,12 @@ recordings. The analysis comes in milestone 2.
   repository settings, Pages, Source must be set to **GitHub Actions** (see the
   build guide).
 
+## Safety rule for the device
+
+**Slide switch OFF before plugging anything into the C3's USB-C. Charge ONLY
+through the TP4056's USB-C port.** See the build guide for why (and for the
+mandatory charge-current resistor change on the TP4056 board).
+
 ## Checking a recording
 
 Recordings are `.pkraw` files saved by the record page. Install the analysis
