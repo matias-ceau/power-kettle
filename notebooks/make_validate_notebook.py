@@ -89,10 +89,11 @@ import numpy as np
 from matplotlib.patches import Patch
 
 from powerkettle.__main__ import info
-from powerkettle.anchors import sagittal_tilt, set_forwards
+from powerkettle.anchors import (LOW_GATE_HALF_S, MOTION_MIN_SAMPLES, _prominence,
+                                 sagittal_tilt, set_forwards)
 from powerkettle.bell import BellProfile
-from powerkettle.calibration import CalibrationError
-from powerkettle.imu import scale_run
+from powerkettle.calibration import CalibrationError, correct_acc_scale
+from powerkettle.imu import G, scale_run
 from powerkettle.integrate import rest_core
 from powerkettle.pipeline import (WARN_CARRIED_CALIBRATION, AnalysisConfig, analyse_run,
                                   map_markers, motion_stages)
@@ -220,8 +221,9 @@ md(r"""
 ## 5. Analyse every run
 
 A *run* is one continuous stretch of data (a Bluetooth reconnect starts a new run). Each run is
-analysed on its own; a run that has no 5 s still period at its start re-uses the calibration of the
-run before it (a warning says so).
+analysed on its own; a later run keeps the mounting found in the run before it, and a run with no
+still period at all re-uses its calibration (a warning says so). Data before the first still
+period is analysed too (a warning says how many seconds).
 
 The notebook also keeps the intermediate signals (orientation, velocity, position, anchors) so
 that the next sections can plot them.
@@ -241,12 +243,13 @@ def run_markers(run, markers):
     return [((i - first) / run.rate_hz, text) for i, text in map_markers(run, inside)]
 
 
-def theta_series(q, calib, anchors, cfg):
+def theta_series(imu, motion, calib, cfg):
     """Sagittal tilt (degrees) of the bell-up axis, + = handle leaning towards the front, using
-    the forward direction of each set (read from the bell parked before it)."""
+    the forward direction of each set (found from the motion, as the analysis does)."""
+    q, anchors = motion.q, motion.anchors
     n = len(q)
     bounds = segment_sets(anchors)
-    fwds = set_forwards(q, calib, anchors, cfg.anchors)
+    fwds = set_forwards(q, calib, anchors, cfg.anchors, imu, motion.kin)
     theta = np.empty(n)
     starts = [0] + [b[0] for b in bounds[1:]] + [n]
     for k in range(len(starts) - 1):
@@ -267,11 +270,12 @@ for k, run in enumerate(rec.runs):
         print(f"run {k}: NOT analysed: {e}")
         continue
     prior = res.calib
-    motion = motion_stages(scale_run(run), res.calib, bell, cfg)
+    imu = correct_acc_scale(scale_run(run), res.calib)   # as analyse_run
+    motion = motion_stages(imu, res.calib, bell, cfg)
     results.append({
-        "k": k, "run": run, "res": res, "motion": motion, "t": res.t,
+        "k": k, "run": run, "res": res, "motion": motion, "t": res.t, "imu": imu,
         "markers": run_markers(run, rec.markers),
-        "theta": theta_series(motion.q, res.calib, motion.anchors, cfg),
+        "theta": theta_series(imu, motion, res.calib, cfg),
         "speed": np.linalg.norm(motion.v, axis=1),
         "omega": np.linalg.norm(motion.kin.omega_w, axis=1),
     })
@@ -429,7 +433,9 @@ md(r"""
 One block per set, one line per rep (numbered through the whole file). `power` is the average power
 over the concentric phase, `peak` the highest instantaneous power, `peak v` the top speed, `height`
 how far the bell's centre rose from the low to the top. `flags` can be `relabelled`, `gap` (data
-missing inside the rep) or `saturated` (the sensor hit its limit).
+missing inside the rep), `saturated` (the sensor hit its limit), `orientation` (after a data gap
+the tilt could not be re-established: kind and height unreliable), `implausible` (an impossible
+height or speed: left out of the power statistics) or `low_conf` (the classifier was unsure).
 
 *Look for:* the number of reps per set equals what you counted, and the set's reps all have the same
 kind and hand.
@@ -614,16 +620,27 @@ back down is shown as a check (it should be the same size with a minus sign).
 not recognised as still-to-still (see the rotation plot) or the bell was not set flat on the table.
 """)
 code(r'''
-LIFT_RE = re.compile(r"table\s*lift\D*?(\d+(?:[.,]\d+)?)\s*(mm|cm|m)?(?![A-Za-z])", re.I)
+LIFT_RE = re.compile(r"table\s*lift", re.I)
+HEIGHT_RE = re.compile(r"(\d+(?:[.,]\d+)?)\s*(mm|cm|m)\b", re.I)     # a number with its unit
+BARE_RE = re.compile(r"\s*(\d+(?:[.,]\d+)?)(?![\d.,])")                # right after "table lift"
 
 
 def marker_height_m(text):
-    """Height in m from a marker like "table lift 74cm" (no unit: cm if >= 3, else m), else None."""
-    m = LIFT_RE.search(text)
-    if not m:
+    """Height in m from a marker like "table lift 74cm" or "table lift #2: 0.74 m": the first
+    number with a unit (mm, cm, m) after "table lift"; else a bare number right after it
+    ("table lift 74": cm if >= 3, else m); else None."""
+    lift = LIFT_RE.search(text)
+    if not lift:
         return None
-    v, unit = float(m.group(1).replace(",", ".")), (m.group(2) or "").lower()
-    if not unit:
+    rest = text[lift.end():]
+    m = HEIGHT_RE.search(rest)
+    if m:
+        v, unit = float(m.group(1).replace(",", ".")), m.group(2).lower()
+    else:
+        m = BARE_RE.match(rest)
+        if not m:
+            return None
+        v = float(m.group(1).replace(",", "."))
         unit = "cm" if v >= 3 else "m"
     return v * {"mm": 1e-3, "cm": 1e-2, "m": 1.0}[unit]
 
@@ -665,9 +682,86 @@ elif errors:
           f"worst {max(errors, key=abs):+.1f} cm")
 ''')
 
+# ============================================================================ margins
+md(r"""
+## 13. Threshold margins
+
+The analysis decides with a few thresholds (``AnalysisConfig``). This section shows **how far your
+data sits from each one**, so the first real recordings tell whether a threshold is about to bite:
+
+- **|f| at each low** (in g; the largest within ±25 ms of the low) against `low_min_f_g`: a low needs
+  the arm pulling the bell out of the backswing.
+- **θ prominence of each low** (degrees) against `prominence_deg`: how far the tilt falls on both
+  sides before rising again.
+- **Static time of each lockout** (s) against `static_min_s` (the shortest still window seen) and the
+  classifier's `snatch_min_static_s`.
+- **Rest-based forward vs motion axis** per stretch between rests (degrees): the analysis takes the
+  forward/backward plane from the motion; the bell's parked pose would give a forward this far off
+  (0° when you park the bell facing you; large is fine, it shows the motion is needed).
+
+*Look for:* values well clear of the dashed threshold lines. Values close to a line are the reps the
+analysis may miss or misclassify on another day.
+""")
+code(r'''
+acfg, ccfg = cfg.anchors, cfg.classifier
+low_f, low_prom, lock_s, fwd_angle = [], [], [], []
+for r in results:
+    m, imu = r["motion"], r["imu"]
+    half = max(0, round(LOW_GATE_HALF_S * imu.fs))
+    f_norm = np.where(imu.valid, m.kin.f_norm, np.nan)
+    for st in m.stretches:
+        if st.s1 - st.s0 < 3:
+            continue
+        th = sagittal_tilt(m.q[st.s0:st.s1], r["res"].calib, st.forward)
+        for a in m.raw_anchors:
+            if a.kind == "low" and st.s0 <= a.i0 < st.s1:
+                win = f_norm[max(0, a.i0 - half):a.i0 + half + 1]
+                low_f.append(np.nanmax(win) / G if np.isfinite(win).any() else np.nan)
+                low_prom.append(math.degrees(_prominence(th, a.i0 - st.s0)))
+        if st.motion.moving >= MOTION_MIN_SAMPLES:
+            fwd_angle.append(math.degrees(math.acos(np.clip(st.hint @ st.forward, -1, 1))))
+    lock_s += [(a.i1 - a.i0 + 1) / imu.fs for a in m.anchors if a.kind == "top_lockout"]
+
+
+def margin_line(name, values, threshold, unit, above=True):
+    v = np.asarray([x for x in values if np.isfinite(x)])
+    if len(v) == 0:
+        print(f"{name}: none")
+        return
+    worst = v.min() if above else v.max()
+    print(f"{name}: n = {len(v)}, min {v.min():.2f}, median {np.median(v):.2f}, max {v.max():.2f} "
+          f"{unit}; threshold {threshold:g} {unit}, closest margin {worst - threshold:+.2f} {unit}")
+
+
+margin_line("|f| at lows", low_f, acfg.low_min_f_g, "g")
+margin_line("θ prominence of lows", low_prom, acfg.prominence_deg, "deg")
+margin_line("lockout static time", lock_s, ccfg.snatch_min_static_s, "s")
+print(f"  (still windows shorter than static_min_s = {acfg.static_min_s:g} s are not seen at all)")
+if fwd_angle:
+    print("rest-based forward vs motion axis per stretch: "
+          + ", ".join(f"{x:.0f}°" for x in fwd_angle))
+
+fig, axes = plt.subplots(1, 4, figsize=(14, 3.2), constrained_layout=True)
+panels = [(low_f, acfg.low_min_f_g, "|f| at lows (g)"),
+          (low_prom, acfg.prominence_deg, "θ prominence of lows (deg)"),
+          (lock_s, ccfg.snatch_min_static_s, "lockout static time (s)"),
+          (fwd_angle, None, "rest forward vs motion axis (deg)")]
+for ax, (vals, thr, title) in zip(axes, panels):
+    vals = [x for x in vals if np.isfinite(x)]
+    ax.plot(np.zeros(len(vals)) + np.random.default_rng(0).uniform(-0.2, 0.2, len(vals)), vals,
+            "o", ms=4, alpha=0.6, color="#0072B2")
+    if thr is not None:
+        ax.axhline(thr, color="#D55E00", ls="--", lw=1.2, label="threshold")
+        ax.legend(loc="best", fontsize=8)
+    ax.set_xticks([])
+    ax.set_xlim(-1, 1)
+    ax.set_title(title, fontsize=9)
+plt.show()
+''')
+
 # ============================================================================ save
 md(r"""
-## 13. Optional: save the analysed session
+## 14. Optional: save the analysed session
 
 Set `SAVE_NPZ` in the settings cell to keep the analysed run(s) as `.npz` files (raw data, bell,
 markers, calibration, summary). The notebook then re-loads each file and re-runs the analysis to prove
@@ -709,12 +803,15 @@ md(r"""
 | 10 Side view | the same shape rep after rep | a very different path (partial rep?) |
 | 11 Markers | agreement near 100 %, partial rep detected as `other` | a rep that disagrees: which one, and why |
 | 12 Table lift | within about 2 cm of the tape | several cm out |
+| 13 Margins | values well clear of the dashed lines | values close to a threshold |
 
 Anything unexpected: note the file name and the section, so it can be investigated against the
 raw data.
 """)
 
 # ============================================================================ write
+for i, c in enumerate(cells):  # deterministic ids: regenerating gives an identical file
+    c["id"] = f"cell-{i:02d}"
 nb = new_notebook(cells=cells, metadata={
     "kernelspec": {"display_name": "Python 3", "language": "python", "name": "python3"},
     "language_info": {"name": "python"},

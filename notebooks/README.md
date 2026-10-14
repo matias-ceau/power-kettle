@@ -54,7 +54,12 @@ in `notebooks/`. When `powerkettle` is not installed the notebook imports it fro
 - **Markers vs classifier:** agreement near 100 %; the partial rep (`snatch R partial rep 6`) is
   expected to be classified `other`. Rep indices of any disagreement are listed.
 - **Table lift:** measured height within about 2 cm of the tape measure (the marker, for example
-  `table lift 74cm`, carries your measured height).
+  `table lift 74cm`, carries your measured height; a number with its unit wins, a bare number
+  counts only right after "table lift").
+- **Threshold margins:** per low, |f| (g) against `low_min_f_g` and θ prominence against
+  `prominence_deg`; per lockout, the static time against the minimum; per stretch, the angle
+  between the parked bell's forward and the motion's axis. Values near a threshold are the reps
+  most at risk.
 
 ### Regenerating the notebook
 
@@ -67,4 +72,5 @@ jupyter nbconvert --to notebook --execute notebooks/validate_recording.ipynb \
     --output-dir /tmp/nb-check                    # check it runs top to bottom (demo recording)
 ```
 
-The committed notebook has no stored outputs; the check above writes its executed copy elsewhere.
+The committed notebook has no stored outputs and deterministic cell ids (regenerating it gives an
+identical file); the check above writes its executed copy elsewhere.
