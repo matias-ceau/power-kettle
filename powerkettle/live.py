@@ -66,7 +66,8 @@ stays one as data arrives). After the pending low, the top is confirmed:
 
 - lockout: a static window of at least ``static_min_s`` (not a confirmed rest) whose height above
   the low is at least ``floor_max_height_m`` (the bell set down on the floor after the final
-  backswing is not a top);
+  backswing is not a top), once it has ended or lasted ``LOCKOUT_CONFIRM_S`` (so a lockout
+  that is still going on is not cut below the classifier's minimum static time);
 - swing top: θ has risen ``prominence_deg`` above its minimum since the low *and* the bell is
   falling (vertical velocity integrated from the low below ``-DESCENT_MIN_MS``): on the way into
   a snatch lockout θ also rises that much above the mid-pull minimum, but the bell still rises;
@@ -135,6 +136,7 @@ PROCESS_EVERY_S = 0.25  # re-run the stages once this much new data has arrived
 CONTEXT_S = 2.0  # the window starts this long before the pending low (prominence, filters)
 MAX_WINDOW_S = 6.0  # a window inside a long hand-held hold is cut to this length
 DESCENT_MIN_MS = 0.5  # m/s: falling speed that confirms a swing top
+LOCKOUT_CONFIRM_S = 0.15  # a lockout still going on confirms a top once it lasts this long
 _TOPS = ("top_swing", "top_lockout")
 _INITIAL_CAPACITY = 4096
 
@@ -381,7 +383,7 @@ class LiveAnalyser:
         feats = rep_features(seg, win.m.q, win.calib, pos, imu.t)
         kind, hand, conf = classify(feats, self.cfg.classifier)
         flags = met.pop("flags")
-        if conf < self.cfg.classifier.low_conf or "orientation" in flags:
+        if conf < self.cfg.classifier.low_conf or flags & {"orientation", "implausible"}:
             flags.add("low_conf")
         met.update(work_ecc_j=math.nan, cycle_s=math.nan)  # need the next low
         rep = Rep(self._low, top.i0, top.i1, -1, kind=kind, hand=hand, confidence=conf,
@@ -483,8 +485,9 @@ class _Window:
         window's last anchor), or None (rules in the module docstring)."""
         acfg = cfg.anchors
         _, held = _static_windows(self.imu, acfg)
+        n, grown = len(self.imu.t), math.ceil(LOCKOUT_CONFIRM_S * self.imu.fs - 1e-9)
         for a, b in held:
-            if a <= low:
+            if a <= low or (b == n and b - a < grown):  # still growing and short: wait
                 continue
             top = Anchor(a, b - 1, "top_lockout")
             arrays = self.with_top(low, top)

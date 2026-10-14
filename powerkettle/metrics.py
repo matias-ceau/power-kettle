@@ -6,14 +6,16 @@ Principle: every power metric derives from *rep power*, so rest never dilutes it
 Conventions
 -----------
 - Power statistics (``PowerStats``, best efforts) use the reps of one kind (snatch / swing
-  never mixed; "other" is never in the statistics), excluding reps flagged "gap" and reps with
-  a non-finite ``power_w``. Hands are pooled within a kind.
+  never mixed; "other" is never in the statistics), excluding reps flagged "gap" or
+  "implausible" and reps with a non-finite ``power_w``. Hands are pooled within a kind. Reps
+  flagged "low_conf" or "orientation" are counted.
 - ``PowerStats``: ``top3`` = mean of the min(3, n) best; ``dropoff`` = (best − mean of the last
   min(3, n) reps) / best (None if best ≤ 0); ``cv`` = population std (ddof = 0) / mean, None
   for n < 2 or mean ≤ 0.
 - ``reps_by_kind_hand`` counts every rep, gap reps included (they happened), keyed
   "kind:hand" (e.g. "snatch:L", "swing:-", "other:-").
-- ``work_j`` = Σ ``work_con_j`` over non-gap reps with a finite value (any kind).
+- ``work_j`` = Σ ``work_con_j`` over non-gap, non-implausible reps with a finite value (any
+  kind).
 - ``qualifying`` = non-gap snatch / swing reps (never "other": failed or partial reps do not
   count toward a rep target) whose finite ``power_w`` ≥ ``power_floor_w``; with no floor, all
   non-gap snatch / swing reps. In a session it is summed over all sets.
@@ -101,8 +103,11 @@ def _counts(reps: Sequence[Rep]) -> dict[str, int]:
     return out
 
 
+_UNMEASURED = ("gap", "implausible")  # flags whose reps' power / work are not trusted
+
+
 def _usable(r: Rep) -> bool:
-    return "gap" not in r.flags and math.isfinite(r.power_w)
+    return not any(f in r.flags for f in _UNMEASURED) and math.isfinite(r.power_w)
 
 
 def _powers_by_kind(reps: Sequence[Rep]) -> dict[str, list[float]]:
@@ -115,7 +120,8 @@ def _powers_by_kind(reps: Sequence[Rep]) -> dict[str, list[float]]:
 
 def _work(reps: Sequence[Rep]) -> float:
     return float(sum(r.work_con_j for r in reps
-                     if "gap" not in r.flags and math.isfinite(r.work_con_j)))
+                     if not any(f in r.flags for f in _UNMEASURED)
+                     and math.isfinite(r.work_con_j)))
 
 
 def _qualifying(reps: Sequence[Rep], power_floor_w: float | None) -> int:

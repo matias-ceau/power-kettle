@@ -346,3 +346,9 @@ def test_unbridged_gap_without_correction_flags_live(monkeypatch):
     assert [e["kind"] for e in reps] == [r.kind for r in ref]
     assert [sorted(e["flags"]) for e in reps if "gap" not in e["flags"]] == [
         sorted(r.flags) for r in ref if "gap" not in r.flags]
+
+
+def test_short_lockout_live():
+    """0.12 s lockouts: live confirms each once it has ended, as a snatch like the batch."""
+    run, truth = simulate([Rest(3), Snatch(6, "R", lockout_s=0.12), Rest(3)])
+    live_matches_batch(run, truth)

@@ -55,9 +55,10 @@ Known limits (to validate on real data)
   touch: a ``top_lockout`` if the bell sat static for ≥ ``static_min_s`` (but < ``rest_min_s``),
   else a ``top_swing`` at the θ minimum. A floor rest split by a BLE gap into pieces shorter than
   ``rest_min_s`` behaves the same. The classifier labels such a "rep" other (negative apex).
-- If a snatch lockout is too short or unsteady for ``static_mask``, no hand-held window lies
-  between its lows and the θ minimum is taken as a ``top_swing``: that is the mid-pull (or drop)
-  minimum, not a zero-velocity point.
+- If a snatch lockout is too short (< 0.1 s, ``static_mask``) or unsteady, no hand-held window
+  lies between its lows and the θ minimum is taken as a ``top_swing``: that is the mid-pull (or
+  drop) minimum, not a zero-velocity point; the rep's apex comes out impossible (~2.7 m in
+  simulation) and ``reps.rep_metrics`` flags it "implausible".
 """
 from __future__ import annotations
 
@@ -84,7 +85,8 @@ SIGN_MIN_ACC = 2.0  # m/s²: margin by which the motion decides the forward's si
 class AnchorConfig:
     prominence_deg: float = 30.0  # a low must stand out of θ by this much (hysteresis)
     low_min_f_g: float = 1.3  # |f| at a low, in g (the arm pulls the bell out of the backswing)
-    static_min_s: float = 0.15  # shortest static window considered (lockout / rest)
+    static_min_s: float = 0.08  # shortest static window considered (lockout / rest; static_mask
+    #                             itself needs 0.1 s, so a 0.12 s lockout is seen)
     rest_min_s: float = 2.0
     tremor_band: tuple = (4.0, 12.0)  # Hz, physiological tremor
     tremor_rms_max: float = 0.02  # m/s², band RMS of f above which a static window is hand-held

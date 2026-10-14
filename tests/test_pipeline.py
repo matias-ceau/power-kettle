@@ -487,3 +487,51 @@ def test_unbridged_gap_before_calibration_window_corrected():
     assert all(r.flags == set() for r in before)
     for r, t in zip(before, truth.reps):
         assert r.apex_m == pytest.approx(t.apex_m, abs=0.05)
+
+
+# ----------------------------------------------------------------------------- I6: short lockouts
+def test_short_lockout_still_a_snatch():
+    """A 0.12 s lockout is a hand-held window (static_min_s 0.08 s; static_mask needs 0.1 s):
+    the snatches keep their kind, hand and power (confidence ≈ 0.2: 0.12 s vs the 0.1 s
+    minimum static time, so some are low_conf)."""
+    run, truth = simulate([Rest(3), Snatch(8, "R", lockout_s=0.12), Rest(3)])
+    res = analyse_run(run)
+    assert [(r.kind, r.hand) for r in reps_of(res)] == [("snatch", "R")] * 8
+    assert all(r.flags <= {"low_conf"} for r in reps_of(res))
+    true_avg = np.mean([t.power_w for t in truth.reps])
+    assert res.metrics.by_kind["snatch"].avg == pytest.approx(true_avg, rel=0.02)
+
+
+@pytest.mark.parametrize("lockout_s", [0.08, 0.05])
+def test_too_short_lockout_flagged_implausible(lockout_s):
+    """A lockout too short to see (< 0.1 s static): its θ minimum is taken as the top and
+    the integration between wrong anchors gives an impossible apex (≈ 2.7 m) or speed. Such
+    reps are flagged "implausible" (and "low_conf") and left out of the power statistics."""
+    run, _ = simulate([Rest(3), Snatch(8, "R", lockout_s=lockout_s), Rest(3)])
+    res = analyse_run(run)
+    reps = reps_of(res)
+    bad = [r for r in reps if r.apex_m > 2.2 or r.apex_m < 0 or r.peak_velocity_ms > 6.0]
+    assert bad, "the setup must produce impossible reps"
+    assert all({"implausible", "low_conf"} <= r.flags for r in bad)
+    assert all("implausible" not in r.flags for r in reps if r not in bad)
+    kept = [r.power_w for r in reps if r.kind in ("snatch", "swing") and r not in bad]
+    n = sum(st.n for st in res.metrics.by_kind.values())
+    assert n == len(kept)
+
+
+def test_implausible_excluded_from_power_stats(sim, clean):
+    """An implausible rep (forced: its peak velocity) is flagged and dropped from the stats."""
+    import powerkettle.reps as rp
+    reps = reps_of(clean)
+    r = reps[0]
+    m = rp.rep_metrics((r.i_low, r.i_top, r.i_top_end, r.i_end), clean.t,
+                       np.full((len(clean.t), 3), 7.0), np.zeros((len(clean.t), 3)),
+                       np.zeros(len(clean.t)), np.ones(len(clean.t), bool),
+                       np.zeros(len(clean.t), bool))
+    assert "implausible" in m["flags"]
+    s0 = dataclasses.replace(clean.sets[0], reps=[dataclasses.replace(
+        reps[0], flags={"implausible", "low_conf"})] + clean.sets[0].reps[1:])
+    from powerkettle.metrics import set_metrics
+    sm = set_metrics(s0)
+    assert sm.by_kind["snatch"].n == len(clean.sets[0].reps) - 1
+    assert sm.reps_by_kind_hand["snatch:L"] == len(clean.sets[0].reps)

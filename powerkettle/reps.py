@@ -23,7 +23,10 @@ Metrics (``rep_metrics``)
 - ``flags``: "gap" if any sample in [i_low, i_end] is invalid or has a non-finite velocity
   (metrics there are NaN or unreliable), "saturated" if any is saturated, "orientation" if any
   is orientation-suspect (after a gap the orientation could not bridge or correct: kind,
-  apex and path unreliable; the rep also gets "low_conf"; metrics count it like low_conf).
+  apex and path unreliable; the rep also gets "low_conf"; metrics count it like low_conf),
+  "implausible" if its apex lies outside ``PLAUSIBLE_APEX_M`` or its peak speed exceeds
+  ``PLAUSIBLE_SPEED_MS`` (wrong anchors, e.g. a snatch lockout too short to see: the rep also
+  gets "low_conf" and is left out of the power statistics).
 
 Sets
 ----
@@ -47,6 +50,8 @@ from .imu import ImuData
 from .integrate import concentric_power
 
 PEAK_SMOOTH_S = 0.025  # moving-average window for peak power
+PLAUSIBLE_APEX_M = (0.0, 2.2)  # a kettlebell rep's apex outside this range is impossible
+PLAUSIBLE_SPEED_MS = 6.0  # ... as is a peak speed above this
 
 
 @dataclass
@@ -162,13 +167,18 @@ def rep_metrics(seg: tuple[int, int, int, int], t: np.ndarray, v: np.ndarray, po
     if suspect is not None and np.any(suspect[span]):
         flags.add("orientation")
     z = np.asarray(pos, dtype=float)[:, 2]
+    apex = float(np.max(z[i_low:i_top_end + 1]) - z[i_low])
+    peak_v = float(np.max(np.linalg.norm(v[i_low:i_top + 1], axis=1)))
+    lo, hi = PLAUSIBLE_APEX_M
+    if apex < lo or apex > hi or peak_v > PLAUSIBLE_SPEED_MS:  # False for NaN
+        flags.add("implausible")
     return {
         "power_w": concentric_power(P, t, i_low, i_top),
         "peak_power_w": float(np.max(smooth)) if len(smooth) else float("nan"),
-        "peak_velocity_ms": float(np.max(np.linalg.norm(v[i_low:i_top + 1], axis=1))),
+        "peak_velocity_ms": peak_v,
         "work_con_j": _work(P, t, i_low, i_top),
         "work_ecc_j": _work(P, t, i_top_end, i_end),
-        "apex_m": float(np.max(z[i_low:i_top_end + 1]) - z[i_low]),
+        "apex_m": apex,
         "con_duration_s": float(t[i_top] - t[i_low]),
         "cycle_s": float(t[i_end] - t[i_low]),
         "flags": flags,
@@ -193,7 +203,7 @@ def build_sets(anchors: list[Anchor], imu: ImuData, quats: np.ndarray, calib: Ca
         feats = rep_features(seg, quats, calib, pos, t)
         kind, hand, conf = classify(feats, cfg)
         flags = m.pop("flags")
-        if conf < cfg.low_conf or "orientation" in flags:
+        if conf < cfg.low_conf or flags & {"orientation", "implausible"}:
             flags.add("low_conf")
         reps.append(Rep(*seg, kind=kind, hand=hand, confidence=conf, features=feats,
                         flags=flags, **m))
