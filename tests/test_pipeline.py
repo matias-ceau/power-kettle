@@ -567,3 +567,12 @@ def test_implausible_excluded_from_power_stats(sim, clean):
     sm = set_metrics(s0)
     assert sm.by_kind["snatch"].n == len(clean.sets[0].reps) - 1
     assert sm.reps_by_kind_hand["snatch:L"] == len(clean.sets[0].reps)
+
+
+def test_cli_bell_with_unknown_field_reported(sim, tmp_path, capsys):
+    run, _ = sim
+    save_session(tmp_path / "s.npz", run, BellProfile(), {})
+    (tmp_path / "bell.json").write_text(json.dumps({"mass": 24.0}))
+    assert main(["analyse", str(tmp_path / "s.npz"), "--bell", str(tmp_path / "bell.json")]) == 1
+    err = capsys.readouterr().err
+    assert "unknown field(s) mass" in err

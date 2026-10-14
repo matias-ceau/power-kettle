@@ -52,12 +52,15 @@ def test_time_axis_uses_rate_and_first_index():
 
 
 def test_saturation_flag():
-    raw = np.zeros((4, 6), dtype=np.int16)
+    """Any axis, accelerometer or gyro, at an int16 limit."""
+    raw = np.zeros((6, 6), dtype=np.int16)
     raw[1, 1] = -32768
     raw[2, 2] = 32767
-    raw[3, 3] = -32768  # gyro only: not acc saturation
-    d = scale_run(make_run([0, 1, 2, 3], raw=raw))
-    assert d.saturated.tolist() == [False, True, True, False]
+    raw[3, 3] = -32768  # gyro: the rate is clipped too
+    raw[4, 5] = 32767
+    raw[5, 4] = 32766
+    d = scale_run(make_run(range(6), raw=raw))
+    assert d.saturated.tolist() == [False, True, True, True, True, False]
 
 
 def test_other_ranges():

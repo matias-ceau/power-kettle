@@ -23,13 +23,34 @@ class BellProfile:
     handle_bar_cm: float = 16.0
     device_thickness_cm: float = 1.0
 
+    def __post_init__(self) -> None:
+        """ValueError for a profile no bell can have (every size and the mass positive, the
+        thickness of the device not negative, the flats narrower than the ball)."""
+        for f in fields(self):
+            v = getattr(self, f.name)
+            if not (math.isfinite(v) and (v >= 0 if f.name == "device_thickness_cm" else v > 0)):
+                raise ValueError(f"bell profile: {f.name} must be a positive number, got {v}")
+        ball = self.circumference_cm / math.pi
+        for name, label in (("bottom_flat_diam_cm", "bottom flat"),
+                            ("side_flat_diam_cm", "side flat")):
+            if getattr(self, name) >= ball:
+                raise ValueError(f"bell profile: {label} Ø {getattr(self, name):g} cm must be "
+                                 f"smaller than the ball Ø {ball:.1f} cm (circumference "
+                                 f"{self.circumference_cm:g} cm)")
+
     def to_dict(self) -> dict:
         return asdict(self)
 
     @classmethod
     def from_dict(cls, d: dict) -> "BellProfile":
+        """Profile from a dict of field values (cm, kg); ValueError for an unknown key or an
+        invalid profile."""
         names = {f.name for f in fields(cls)}
-        return cls(**{k: float(v) for k, v in d.items() if k in names})
+        unknown = sorted(set(d) - names)
+        if unknown:
+            raise ValueError(f"bell profile: unknown field(s) {', '.join(unknown)} "
+                             f"(known: {', '.join(sorted(names))})")
+        return cls(**{k: float(v) for k, v in d.items()})
 
 
 def ball_radius_m(b: BellProfile) -> float:

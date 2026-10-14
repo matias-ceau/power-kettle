@@ -23,7 +23,7 @@ class ImuData:
     acc: np.ndarray  # (N, 3) m/s^2 (specific force); NaN where a sample is missing
     gyro: np.ndarray  # (N, 3) rad/s; NaN where a sample is missing
     valid: np.ndarray  # (N,) bool: sample present and not within the guard of a gap
-    saturated: np.ndarray  # (N,) bool: any accelerometer axis at an int16 limit
+    saturated: np.ndarray  # (N,) bool: any axis (accelerometer or gyro) at an int16 limit
     fs: float  # sample rate, Hz
     first_index: int  # sensor sample_index of row 0
 
@@ -42,8 +42,7 @@ def scale_run(run: Run) -> ImuData:
     acc[rows] = raw[:, :3] * (run.acc_range_g * G / _FULL_SCALE)
     gyro[rows] = raw[:, 3:] * (run.gyro_range_dps / _FULL_SCALE * math.pi / 180.0)
     valid[rows] = True
-    acc_raw = run.raw[:, :3]
-    saturated[rows] = np.any((acc_raw == _INT16_MIN) | (acc_raw == _INT16_MAX), axis=1)
+    saturated[rows] = np.any((run.raw == _INT16_MIN) | (run.raw == _INT16_MAX), axis=1)
 
     for last_before, first_after in run.gaps:
         lo = max(0, last_before - first - (GAP_GUARD_SAMPLES - 1))

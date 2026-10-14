@@ -22,3 +22,21 @@ def test_bell_matches_hand_calculation():
 def test_bell_dict_roundtrip():
     b = BellProfile(device_thickness_cm=1.5)
     assert BellProfile.from_dict(b.to_dict()) == b
+
+
+def test_bell_from_dict_rejects_unknown_keys():
+    with pytest.raises(ValueError, match="mass"):
+        BellProfile.from_dict({"mass": 24.0})
+
+
+@pytest.mark.parametrize("kw, match", [
+    ({"bottom_flat_diam_cm": 21.0}, "bottom flat"),  # ball Ø = 63 / π ≈ 20.05 cm
+    ({"side_flat_diam_cm": 20.1}, "side flat"),
+    ({"circumference_cm": 0.0}, "circumference"),
+    ({"mass_kg": -1.0}, "mass"),
+])
+def test_bell_invalid_geometry(kw, match):
+    with pytest.raises(ValueError, match=match):
+        BellProfile(**kw)
+    with pytest.raises(ValueError, match=match):
+        BellProfile.from_dict(kw)
