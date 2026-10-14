@@ -146,24 +146,32 @@ def test_tremor_free_hold_is_rest_and_lows_survive():
         assert abs(got.i0 - want) <= POINT_TOL
 
 
-def test_tremor_rms_floor_rest_vs_hold():
-    run, truth = simulate([Rest(3), Snatch(2, "R"), Hold(5), Rest(4)], BELL)
+@pytest.mark.parametrize("mount_deg", [-30.0, 0.0, 30.0, 90.0])
+def test_tremor_rms_floor_rest_vs_hold(mount_deg):
+    """The tremor measure must not depend on how the box is mounted (at -30° the simulated
+    tremor is almost perpendicular to gravity, invisible in |f|)."""
+    run, truth = simulate([Rest(3), Snatch(2, "R"), Hold(5), Rest(4)], BELL,
+                          SimConfig(mount_angle_deg=mount_deg))
     imu = scale_run(run)
     rests = [(i0, i1) for i0, i1, k in truth.anchor_windows if k == "rest"]
+    assert len(rests) == 2
     for i0, i1 in rests:
-        assert tremor_rms(imu.acc[i0:i1 + 1], imu.fs, (4.0, 12.0)) < 0.01
+        assert tremor_rms(imu.acc[i0:i1 + 1], imu.fs, (4.0, 12.0)) < 0.01  # half the threshold
     last = truth.reps[-1]
     hold = imu.acc[last.i_top:last.i_top_end + 1]
     assert tremor_rms(hold, imu.fs, (4.0, 12.0)) > 0.05
 
 
-def test_tremor_rms_of_pure_tone():
+def test_tremor_rms_of_pure_tone_any_direction():
     fs = 400.0
     t = np.arange(800) / fs
-    acc = np.zeros((800, 3))
-    acc[:, 2] = G + 0.3 * t + 0.1 * np.sin(2 * np.pi * 8.0 * t)  # trend + 8 Hz tone
-    assert tremor_rms(acc, fs, (4.0, 12.0)) == pytest.approx(0.1 / np.sqrt(2), rel=0.05)
-    assert tremor_rms(acc, fs, (20.0, 40.0)) < 0.005
+    tone = 0.1 * np.sin(2 * np.pi * 8.0 * t)
+    for axis in range(3):  # gravity on z; a tone across gravity counts as much as along it
+        acc = np.zeros((800, 3))
+        acc[:, 2] = G + 0.3 * t  # slow trend, removed by the detrend
+        acc[:, axis] += tone
+        assert tremor_rms(acc, fs, (4.0, 12.0)) == pytest.approx(0.1 / np.sqrt(2), rel=0.05)
+        assert tremor_rms(acc, fs, (20.0, 40.0)) < 0.005
 
 
 def test_sagittal_tilt_matches_simulator_theta(main_session):

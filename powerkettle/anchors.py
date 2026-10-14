@@ -21,8 +21,9 @@ before it (the calibration window before the first rest). The axis is always re-
 rest (absorbing gyro heading drift), but its sign is kept continuous with the previous forward:
 a forward that turns by more than 90° between rests is taken to be the bell parked turned round
 (or a hold without tremor, where the hand has twisted the bell 180°, provisionally taken as a
-rest), not the athlete turning round. A rest whose outward axis is close to vertical gives no
-forward and the previous one is kept.
+rest), not the athlete turning round. Cost: a lifter who really turns round between sets gets an
+inverted θ for that set (lows and tops missed) until the next rest; to validate on real data. A
+rest whose outward axis is close to vertical gives no forward and the previous one is kept.
 
 Sets in anchor terms
 --------------------
@@ -30,6 +31,15 @@ A set is the run of anchors between two rest anchors. It opens with its first lo
 from the floor to the first backswing is not a rep) and closes with its last low (the descent
 to the floor is not a rep): a top anchor is only placed between two consecutive lows with no
 rest between them, so a rest is always next to a low or another rest, never a top.
+
+Known limits (to validate on real data)
+---------------------------------------
+- A set ends only at a rest (≥ ``rest_min_s``, no tremor). If the bell only touches the floor
+  between two sets, the two lows around the touch are consecutive and a ``top_swing`` is placed
+  at the floor touch; the classifier labels that "rep" other (negative apex).
+- If a snatch lockout is too short or unsteady for ``static_mask``, no hand-held window lies
+  between its lows and the θ minimum is taken as a ``top_swing``: that is the mid-pull (or drop)
+  minimum, not a zero-velocity point.
 """
 from __future__ import annotations
 
@@ -55,7 +65,7 @@ class AnchorConfig:
     static_min_s: float = 0.15  # shortest static window considered (lockout / rest)
     rest_min_s: float = 2.0
     tremor_band: tuple = (4.0, 12.0)  # Hz, physiological tremor
-    tremor_rms_max: float = 0.02  # m/s², band RMS of |f| above which a static window is hand-held
+    tremor_rms_max: float = 0.02  # m/s², band RMS of f above which a static window is hand-held
     floor_max_height_m: float = 0.8  # used by Task 8 (refine_rests)
 
 
@@ -67,18 +77,20 @@ class Anchor:
 
 
 def tremor_rms(acc: np.ndarray, fs: float, band) -> float:
-    """RMS (m/s²) of the `band` (Hz, inclusive) content of |f| over a window of specific force
-    `acc` (n, 3): |f| is linearly detrended and Hann-tapered (the taper keeps the motion tails at
-    the window edges out of the band), and the band power is read from the FFT and corrected for
-    the taper's power loss."""
-    mag = np.linalg.norm(np.asarray(acc, dtype=float), axis=1)
-    n = len(mag)
+    """RMS (m/s²) of the `band` (Hz, inclusive) content of the specific-force vector over a
+    window `acc` (n, 3), combined over the three axes (so independent of the tremor's direction
+    and of the sensor mounting): each axis is linearly detrended and Hann-tapered (the taper
+    keeps the motion tails at the window edges out of the band), and the band power is read from
+    the FFT and corrected for the taper's power loss."""
+    acc = np.asarray(acc, dtype=float)
+    n = len(acc)
     if n < 3:
         return 0.0
     x = np.arange(n, dtype=float)
-    resid = mag - np.polyval(np.polyfit(x, mag, 1), x)
+    coef = np.polyfit(x, acc, 1)  # (2, 3): slope and intercept per axis
+    resid = acc - (np.outer(x, coef[0]) + coef[1])
     w = np.hanning(n)
-    spec = np.fft.rfft(resid * w)
+    spec = np.fft.rfft(resid * w[:, None], axis=0)
     freq = np.fft.rfftfreq(n, 1.0 / fs)
     sel = (freq >= band[0]) & (freq <= band[1]) & (freq > 0) & (freq < fs / 2)
     power = 2.0 * np.sum(np.abs(spec[sel]) ** 2) / n**2 / np.mean(w**2)
@@ -188,7 +200,7 @@ def detect_anchors(imu: ImuData, quats: np.ndarray, kin: Kinematics, calib: Cali
     """Rests, lows, swing tops and lockouts, sorted by position.
 
     1. Static windows (`static_mask`) of at least `static_min_s`: a rest if the tremor-band RMS of
-       |f| is at most `tremor_rms_max` and it lasts `rest_min_s`; otherwise hand-held.
+       f (`tremor_rms`) is at most `tremor_rms_max` and it lasts `rest_min_s`; otherwise hand-held.
     2. Between rests, θ uses the forward of the rest before (see the module docstring).
     3. Lows: local maxima of θ with prominence ≥ `prominence_deg` (within the stretch between
        rests), outside hand-held static windows, at a valid sample with |f| ≥ `low_min_f_g`·g.
