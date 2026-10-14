@@ -94,18 +94,32 @@ def test_gaps_break_still_window(session):
     assert win.start > n // 2
 
 
+def _scaled(imu, factor):
+    return type(imu)(imu.t, imu.acc * factor, imu.gyro, imu.valid, imu.saturated, imu.fs,
+                     imu.first_index)
+
+
 def test_wrong_scale_warns_once(session):
     imu, _ = session
-    win = find_still_window(imu, CalibrationConfig())
-    scaled = type(imu)(imu.t, imu.acc * 1.05, imu.gyro, imu.valid, imu.saturated, imu.fs,
-                       imu.first_index)
-    cal = calibrate(scaled, BELL, window=win)
+    cal = calibrate(_scaled(imu, 1.05), BELL)  # auto-detected window: stillness is scale-free
     assert len(cal.warnings) == 1
     assert cal.warnings[0].startswith("accelerometer magnitude off by")
     assert "5.0 %" in cal.warnings[0]
-    # auto-detection refuses a window whose |f| is 5 % off g
-    with pytest.raises(CalibrationError):
-        find_still_window(scaled, CalibrationConfig())
+    assert cal.still == find_still_window(imu, CalibrationConfig())
+
+
+def test_gross_scale_error_is_an_error(session):
+    imu, _ = session
+    with pytest.raises(CalibrationError, match="still but .* off g"):
+        calibrate(_scaled(imu, 1.2), BELL)
+
+
+def test_window_with_steady_but_changing_magnitude_is_not_still(session):
+    imu, _ = session
+    acc = imu.acc.copy()
+    acc[: len(acc) // 2] *= np.linspace(1.0, 1.2, len(acc) // 2)[:, None]  # ramps 20 %
+    ramped = type(imu)(imu.t, acc, imu.gyro, imu.valid, imu.saturated, imu.fs, imu.first_index)
+    assert find_still_window(ramped, CalibrationConfig()).start > 0
 
 
 def test_explicit_window_is_used(session):
