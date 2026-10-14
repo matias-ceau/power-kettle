@@ -109,6 +109,18 @@ def test_default_ranges_without_status():
     run = to_recording(make_log([pkt(0, 0, 19)])).runs[0]
     assert (run.acc_range_g, run.gyro_range_dps) == (16, 2000)
     assert run.rate_hz == 400.0 and run.statuses == []
+    assert run.rate_estimated is False
+
+
+def test_packet_times_map_phone_time_to_first_index():
+    log = RawLog({}, [
+        RawRecord(1, 10.5, pkt(0, 0, 19)), RawRecord(3, 11.0, b"m"), RawRecord(1, 12.25, pkt(1, 19, 19)),
+        RawRecord(1, 20.0, pkt(2, 50, 7)), RawRecord(1, 30.0, pkt(0, 0, 19)),
+    ])
+    runs = to_recording(log).runs
+    assert runs[0].packet_times.dtype == np.float64 and runs[0].packet_times.shape == (3, 2)
+    assert runs[0].packet_times.tolist() == [[10.5, 0.0], [12.25, 19.0], [20.0, 50.0]]
+    assert runs[1].packet_times.tolist() == [[30.0, 0.0]]
 
 
 def stream_records(seconds, rate=402, t0_ms=0.0, ahead=0):
@@ -129,6 +141,13 @@ def test_run_rate_estimated_from_its_statuses():
     run = to_recording(RawLog({}, recs)).runs[0]
     assert run.rate_hz == pytest.approx(402.0, rel=1e-6)
     assert len(run.statuses) == 10
+    assert run.rate_estimated is True
+
+
+def test_short_run_rate_not_estimated():
+    recs, _ = stream_records(3)  # statuses span 2 s < MIN_RATE_SPAN_S
+    run = to_recording(RawLog({}, recs)).runs[0]
+    assert run.rate_hz == 400.0 and run.rate_estimated is False
 
 
 def test_status_ahead_of_received_packets_still_gives_rate():
@@ -221,3 +240,12 @@ def test_info_cli():
                          check=True, capture_output=True, text=True).stdout
     assert "runs: 1" in out and "samples: 2" in out and "markers: 1" in out
     assert "snatch L" in out
+    assert "rate 400.00 Hz (nominal: no status data)" in out
+
+
+def test_info_estimated_rate_not_marked_nominal(tmp_path):
+    recs, _ = stream_records(10)
+    write_rawlog(tmp_path/"a.pkraw", {}, recs)
+    out = subprocess.run([sys.executable, "-m", "powerkettle", "info", str(tmp_path/"a.pkraw")],
+                         check=True, capture_output=True, text=True).stdout
+    assert "rate 402.00 Hz," in out and "nominal" not in out

@@ -48,9 +48,12 @@ class Run:
     raw: np.ndarray  # int16 (N, 6)
     gaps: list[tuple[int, int]]  # (last index before gap, first index after)
     statuses: list[Status]
-    rate_hz: float  # estimated true sample rate
+    rate_hz: float  # estimated true sample rate (nominal ODR when rate_estimated is False)
     acc_range_g: int
     gyro_range_dps: int
+    rate_estimated: bool = False  # True only when rate_hz was fitted from statuses
+    # float64 (k, 2): (phone_ms, first_index) per packet, for mapping phone-time markers to indices
+    packet_times: np.ndarray = field(default_factory=lambda: np.zeros((0, 2)))
 
 
 @dataclass
@@ -107,16 +110,21 @@ def write_rawlog(path: str | os.PathLike, meta: dict, records: list[RawRecord]) 
         f.write(b"".join(parts))
 
 
-def estimate_rate(statuses: list[Status], nominal_hz: float) -> float:
-    """Least-squares slope of sample_index vs time_us/1e6 (samples per second)."""
+def _fit_rate(statuses: list[Status]) -> float | None:
+    """Least-squares slope of sample_index vs time_us/1e6, or None if the statuses span too little."""
     if len(statuses) < 2:
-        return nominal_hz
+        return None
     t = np.array([s.time_us for s in statuses], dtype=np.float64) / 1e6
     idx = np.array([s.sample_index for s in statuses], dtype=np.float64)
     if t.max() - t.min() < MIN_RATE_SPAN_S:
-        return nominal_hz
-    slope = np.polyfit(t, idx, 1)[0]
-    return float(slope)
+        return None
+    return float(np.polyfit(t, idx, 1)[0])
+
+
+def estimate_rate(statuses: list[Status], nominal_hz: float) -> float:
+    """Samples per second fitted from statuses; nominal_hz when they cannot support a fit."""
+    fitted = _fit_rate(statuses)
+    return nominal_hz if fitted is None else fitted
 
 
 @dataclass
@@ -125,15 +133,17 @@ class _RunBuilder:
     gyro_range_dps: int
     nominal_hz: float
     packets: list[ImuPacket] = field(default_factory=list)
+    packet_ms: list[float] = field(default_factory=list)
     gaps: list[tuple[int, int]] = field(default_factory=list)
     statuses: list[Status] = field(default_factory=list)
     next_index: int = 0
 
-    def add(self, p: ImuPacket) -> None:
+    def add(self, p: ImuPacket, phone_ms: float) -> None:
         n = p.samples.shape[0]
         if self.packets and p.first_index != self.next_index:
             self.gaps.append((self.next_index - 1, p.first_index))
         self.packets.append(p)
+        self.packet_ms.append(phone_ms)
         self.next_index = p.first_index + n
 
     def is_candidate(self, st: Status) -> bool:
@@ -155,9 +165,13 @@ class _RunBuilder:
         sample_index = np.concatenate([
             p.first_index + np.arange(p.samples.shape[0], dtype=np.int64) for p in self.packets
         ])
+        fitted = _fit_rate(self.statuses)
+        packet_times = np.array([(ms, p.first_index) for ms, p in zip(self.packet_ms, self.packets)],
+                                dtype=np.float64)
         return Run(sample_index, raw, self.gaps, self.statuses,
-                   estimate_rate(self.statuses, self.nominal_hz),
-                   self.acc_range_g, self.gyro_range_dps)
+                   self.nominal_hz if fitted is None else fitted,
+                   self.acc_range_g, self.gyro_range_dps,
+                   rate_estimated=fitted is not None, packet_times=packet_times)
 
 
 def to_recording(log: RawLog) -> Recording:
@@ -185,7 +199,7 @@ def to_recording(log: RawLog) -> Recording:
                     float(latest.odr_hz) if latest else float(DEFAULT_ODR_HZ),
                 )
                 builders.append(current)
-            current.add(p)
+            current.add(p, rec.phone_ms)
             prev_first = p.first_index
         elif rec.type == REC_STATUS:
             latest = decode_status(rec.payload)

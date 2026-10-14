@@ -20,8 +20,9 @@ def info(path: str) -> str:
     ]
     for i, r in enumerate(rec.runs):
         dropped = sum(b - a - 1 for a, b in r.gaps)
+        rate_note = "" if r.rate_estimated else " (nominal: no status data)"
         lines.append(
-            f"  run {i}: {r.raw.shape[0]} samples, rate {r.rate_hz:.2f} Hz, "
+            f"  run {i}: {r.raw.shape[0]} samples, rate {r.rate_hz:.2f} Hz{rate_note}, "
             f"{r.acc_range_g} g / {r.gyro_range_dps} dps, "
             f"gaps {len(r.gaps)} ({dropped} samples dropped)"
         )
