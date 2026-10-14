@@ -2,19 +2,22 @@
 import { KettleBle } from "./ble.js";
 import { Recorder } from "./recorder.js";
 import { decodeStatus, encodeCommand } from "./protocol.js";
-import { MARKERS, buildMeta, formatDuration, isLowBattery, measuredRateHz, pkrawFilename } from "./format.js";
+import {
+  MARKERS, StreamingWatch, buildMeta, formatDuration, isLowBattery, isTruncatedStatus, measuredRateHz, pkrawFilename,
+} from "./format.js";
 
 const $ = (id) => document.getElementById(id);
 const el = {
-  btMissing: $("bt-missing"), lowBattery: $("low-battery"),
+  btMissing: $("bt-missing"), lowBattery: $("low-battery"), mtuSmall: $("mtu-small"), notStreaming: $("not-streaming"),
   connState: $("conn-state"), connect: $("connect"),
   start: $("start"), stop: $("stop"), message: $("message"),
   markers: $("markers"), markerForm: $("marker-free"), markerText: $("marker-text"), markerAdd: $("marker-add"),
   battery: $("r-battery"), samples: $("r-samples"), rate: $("r-rate"),
-  gaps: $("r-gaps"), dropped: $("r-dropped"), duration: $("r-duration"),
+  gaps: $("r-gaps"), runs: $("r-runs"), dropped: $("r-dropped"), duration: $("r-duration"),
 };
 
 const STOP_WRITE_TIMEOUT_MS = 2000;
+const STATUS_READ_PERIOD_MS = 1000;
 const phoneNow = () => performance.timeOrigin + performance.now();
 
 const ble = new KettleBle();
@@ -26,6 +29,9 @@ let linkState = "disconnected"; // disconnected | connecting | connected | recon
 let lastStatus = null;
 let wakeLock = null;
 let ticker = null;
+let statusTruncated = false; // status notifications arrive cut short (ATT MTU 23)
+let statusPoll = null;       // reads the full status once a second while statusTruncated
+const streamWatch = new StreamingWatch();
 
 function say(text, isError = false) {
   el.message.textContent = text;
@@ -55,10 +61,13 @@ function render() {
 
   el.battery.textContent = lastStatus ? `${lastStatus.batteryMv} mV` : "-";
   el.lowBattery.hidden = !isLowBattery(lastStatus);
+  el.mtuSmall.hidden = !statusTruncated;
+  el.notStreaming.hidden = !(recording && linkState === "connected" && streamWatch.stalled(performance.now()));
   const stats = recorder?.stats;
   el.samples.textContent = stats ? String(stats.samples) : "0";
   el.rate.textContent = stats && stats.durationS > 0 ? measuredRateHz(stats.samples, stats.durationS).toFixed(1) : "-";
   el.gaps.textContent = stats ? String(stats.gaps) : "0";
+  el.runs.textContent = stats ? String(stats.runs) : "0";
   el.dropped.textContent = stats?.lastStatus ? String(stats.lastStatus.dropped) : "-";
   const elapsedMs = recorder ? (recording ? performance.now() : stoppedAt) - startedAt : 0;
   el.duration.textContent = formatDuration(elapsedMs / 1000);
@@ -103,8 +112,25 @@ ble.addEventListener("imu", (e) => {
   }
 });
 
+/**
+ * At the default ATT MTU the 28-byte status notification is cut to 20 bytes. Then show a warning
+ * and read the status characteristic once a second instead (GATT long reads are not MTU-limited).
+ */
+function setStatusTruncated(on) {
+  if (on === statusTruncated) return;
+  statusTruncated = on;
+  clearInterval(statusPoll);
+  statusPoll = on
+    ? setInterval(() => ble.readStatus().catch((err) => console.warn("status read failed", err)), STATUS_READ_PERIOD_MS)
+    : null;
+  render();
+}
+
 ble.addEventListener("status", (e) => {
-  const { bytes, phoneMs } = e.detail;
+  const { bytes, phoneMs, source } = e.detail;
+  if (bytes.length >= 2) streamWatch.status(bytes[1]); // flags survive truncation
+  if (source === "notify") setStatusTruncated(isTruncatedStatus(bytes));
+  if (isTruncatedStatus(bytes)) return; // not decodable; the 1 s reads supply full statuses
   try {
     if (recording) recorder.onStatus(bytes, phoneMs); // validates, then logs
     lastStatus = decodeStatus(new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength));
@@ -115,13 +141,16 @@ ble.addEventListener("status", (e) => {
   if (!recording) render();
 });
 
+// Every reconnect during a recording, automatic or manual, logs {"e":"reconnect"} then
+// {"e":"start"}: ble.js re-sends start on its own retries and emits "restarted"; after a manual
+// Connect (it had given up) the page sends start itself.
 ble.addEventListener("connected", async (e) => {
   linkState = "connected";
   if (recorder && recording) {
-    logEvent({ e: e.detail.reconnect ? "reconnect" : "connect" });
+    logEvent({ e: "reconnect" });
     if (!e.detail.reconnect) {
       // Manual reconnect after giving up: ble.js only auto-resumes on its own retries.
-      try { await ble.send(encodeCommand("start")); logEvent({ e: "start" }); } catch (err) { say(`Could not resume: ${err.message}`, true); }
+      try { await ble.send(encodeCommand("start")); logStarted(); } catch (err) { say(`Could not resume: ${err.message}`, true); }
     }
     say(e.detail.reconnect ? "Reconnected. Streaming resumed (new run in the log)." : "Reconnected.");
   } else {
@@ -130,8 +159,13 @@ ble.addEventListener("connected", async (e) => {
   render();
 });
 
+ble.addEventListener("restarted", () => {
+  if (recorder && recording) logStarted();
+});
+
 ble.addEventListener("disconnected", (e) => {
   linkState = e.detail.willRetry ? "reconnecting" : "disconnected";
+  setStatusTruncated(false); // MTU is per connection; the next notification decides again
   if (recorder && recording) {
     logEvent({ e: "disconnect" });
     if (e.detail.willRetry) say("Connection lost, retrying...", true);
@@ -164,7 +198,15 @@ el.connect.addEventListener("click", async () => {
   }
 });
 
+/** Logs a `start` that was just written and watches that the device really streams. */
+function logStarted() {
+  logEvent({ e: "start" });
+  streamWatch.started(performance.now());
+}
+
 el.start.addEventListener("click", async () => {
+  if (recorder) return;
+  el.start.disabled = true; // before the await: a second tap must not create another Recorder
   recorder = new Recorder(buildMeta(navigator.userAgent));
   recording = true;
   startedAt = performance.now();
@@ -180,6 +222,7 @@ el.start.addEventListener("click", async () => {
     render();
     return;
   }
+  streamWatch.started(performance.now());
   acquireWakeLock();
   ticker = setInterval(render, 250);
   render();
@@ -194,6 +237,7 @@ async function stopStreaming() {
   stoppedAt = performance.now();
   clearInterval(ticker);
   ticker = null;
+  streamWatch.stop();
   recorder.event({ e: "stop" }, phoneNow());
   releaseWakeLock();
   // Always call send(): it records the stop intent even when the link is down, so a pending

@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { KettleBle } from "../js/ble.js";
-import { SERVICE_UUID, IMU_UUID, CONTROL_UUID } from "../js/protocol.js";
+import { SERVICE_UUID, IMU_UUID, CONTROL_UUID, STATUS_UUID } from "../js/protocol.js";
 
 // A fake Web Bluetooth stack that records the order of notification/write calls.
 function makeFake({ failConnects = 0, reuseChars = false } = {}) {
@@ -12,6 +12,14 @@ function makeFake({ failConnects = 0, reuseChars = false } = {}) {
     t.uuid = uuid;
     t.startNotifications = async () => { log.push(`notify:${uuid.slice(0, 8)}`); };
     t.writeValueWithResponse = async (b) => { log.push(`write:${Buffer.from(b).toString("hex")}`); };
+    // GATT read: resolves with readResult; firesEvent mimics the spec (and Chrome), which also
+    // fires characteristicvaluechanged with the same DataView before resolving.
+    t.readValue = async () => {
+      log.push(`read:${uuid.slice(0, 8)}`);
+      t.value = new DataView(t.readResult.slice().buffer);
+      if (t.firesEvent) t.dispatchEvent(new Event("characteristicvaluechanged"));
+      return t.value;
+    };
     return t;
   };
   const device = new EventTarget();
@@ -71,7 +79,7 @@ test("reconnect re-subscribes both characteristics, then re-sends start", async 
   const delays = [];
   const ble = new KettleBle({ bluetooth: f.bluetooth, sleepFn: async (ms) => { delays.push(ms); } });
   const events = [];
-  for (const t of ["connected", "disconnected", "reconnecting", "gaveup"]) {
+  for (const t of ["connected", "disconnected", "reconnecting", "gaveup", "restarted"]) {
     ble.addEventListener(t, (e) => events.push([t, e.detail]));
   }
   await ble.connect();
@@ -82,8 +90,21 @@ test("reconnect re-subscribes both characteristics, then re-sends start", async 
   assert.deepEqual(f.log.slice(0, 2).sort(), ["notify:f3a10002", "notify:f3a10004"]);
   assert.equal(f.log[2], "write:01");
   assert.deepEqual(delays, [1000]);
-  assert.deepEqual(events.map((e) => e[0]), ["connected", "disconnected", "reconnecting", "connected"]);
-  assert.equal(events.at(-1)[1].reconnect, true);
+  // "restarted" follows "connected" so the page logs {"e":"reconnect"} then {"e":"start"},
+  // the same events as a manual reconnect.
+  assert.deepEqual(events.map((e) => e[0]), ["connected", "disconnected", "reconnecting", "connected", "restarted"]);
+  assert.equal(events.at(-2)[1].reconnect, true);
+});
+
+test("a reconnect while not streaming emits no restarted", async () => {
+  const f = makeFake();
+  const ble = new KettleBle({ bluetooth: f.bluetooth, sleepFn: instant });
+  const events = [];
+  for (const t of ["connected", "restarted"]) ble.addEventListener(t, () => events.push(t));
+  await ble.connect();
+  f.device.gatt.disconnect();
+  await tick(); await tick();
+  assert.deepEqual(events, ["connected", "connected"]);
 });
 
 test("no start is re-sent after a stop", async () => {
@@ -185,4 +206,46 @@ test("a failed stop write still clears the resume-streaming intent", async () =>
   f.device.gatt.disconnect();
   await tick(); await tick();
   assert.ok(!f.log.some((l) => l.startsWith("write:")), JSON.stringify(f.log));
+});
+
+const STATUS_28 = Uint8Array.from({ length: 28 }, (_, i) => i);
+
+test("status notifications are tagged source notify", async () => {
+  const f = makeFake();
+  const ble = new KettleBle({ bluetooth: f.bluetooth });
+  await ble.connect();
+  const got = [];
+  ble.addEventListener("status", (e) => got.push(e.detail));
+  f.device.chars[STATUS_UUID].value = new DataView(new ArrayBuffer(20));
+  f.device.chars[STATUS_UUID].dispatchEvent(new Event("characteristicvaluechanged"));
+  assert.equal(got.length, 1);
+  assert.equal(got[0].source, "notify");
+  assert.equal(got[0].bytes.length, 20);
+});
+
+test("readStatus emits the full status read once, tagged source read", async () => {
+  for (const firesEvent of [false, true]) {
+    const f = makeFake();
+    const ble = new KettleBle({ bluetooth: f.bluetooth });
+    await ble.connect();
+    Object.assign(f.device.chars[STATUS_UUID], { readResult: STATUS_28, firesEvent });
+    const got = [];
+    ble.addEventListener("status", (e) => got.push(e.detail));
+    await ble.readStatus();
+    assert.equal(got.length, 1, `firesEvent=${firesEvent}`);
+    assert.equal(got[0].source, "read");
+    assert.deepEqual([...got[0].bytes], [...STATUS_28]);
+    assert.ok(Number.isFinite(got[0].phoneMs));
+    assert.ok(f.log.includes("read:f3a10004"));
+  }
+});
+
+test("readStatus does not overlap reads and rejects when not connected", async () => {
+  const f = makeFake();
+  const ble = new KettleBle({ bluetooth: f.bluetooth });
+  await assert.rejects(ble.readStatus(), /not connected/);
+  await ble.connect();
+  f.device.chars[STATUS_UUID].readResult = STATUS_28;
+  await Promise.all([ble.readStatus(), ble.readStatus()]);
+  assert.equal(f.log.filter((l) => l.startsWith("read:")).length, 1);
 });

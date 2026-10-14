@@ -13,6 +13,8 @@
 
   <div id="bt-missing" class="banner" hidden>Use Chrome on Android or desktop. This browser has no Web Bluetooth.</div>
   <div id="low-battery" class="banner" hidden>Low battery. Charge the kettle sensor soon.</div>
+  <div id="mtu-small" class="banner" hidden>Bluetooth MTU too small (status truncated). Reading status once a second instead; IMU packets carry fewer samples.</div>
+  <div id="not-streaming" class="banner" hidden>Device is not streaming — check the sensor (serial log)</div>
 
   <section class="card">
     <h2>Connection</h2>
@@ -28,6 +30,7 @@
       <div class="readout"><dt>Samples</dt><dd id="r-samples">0</dd></div>
       <div class="readout"><dt>Rate (Hz)</dt><dd id="r-rate">-</dd></div>
       <div class="readout"><dt>Gaps</dt><dd id="r-gaps">0</dd></div>
+      <div class="readout"><dt>Runs</dt><dd id="r-runs">0</dd></div>
       <div class="readout"><dt>Dropped</dt><dd id="r-dropped">-</dd></div>
       <div class="readout"><dt>Duration</dt><dd id="r-duration">0:00</dd></div>
     </dl>

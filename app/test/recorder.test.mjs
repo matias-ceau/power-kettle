@@ -63,6 +63,20 @@ test("first_index going backwards starts a new run, not a gap", () => {
   r.onImu(imu(1, 19, 19), 2050);
   assert.equal(r.stats.gaps, 0);
   assert.equal(r.stats.samples, 76);
+  assert.equal(r.stats.runs, 2);
+});
+
+test("runs counts runs the way the Python reader splits them", () => {
+  const r = new Recorder();
+  assert.equal(r.stats.runs, 0);
+  r.onImu(imu(0, 0, 19), 1000);
+  r.onImu(imu(1, 19, 19), 1050);
+  r.onImu(imu(2, 100, 19), 1100); // gap, same run
+  assert.equal(r.stats.runs, 1);
+  r.onImu(imu(0, 0, 19), 2000); // restart after a reconnect
+  r.onImu(imu(1, 19, 19), 2050);
+  r.onImu(imu(0, 0, 19), 3000); // and another
+  assert.equal(r.stats.runs, 3);
 });
 
 test("a gap right after a restart is still detected", () => {

@@ -1,6 +1,8 @@
 // Web Bluetooth link to the PowerKettle. Emits (CustomEvent, detail):
-//   imu / status   {bytes: Uint8Array (copy), phoneMs}
+//   imu            {bytes: Uint8Array (copy), phoneMs}
+//   status         {bytes, phoneMs, source: "notify" | "read"}  ("read" = from readStatus())
 //   connected      {reconnect: boolean}
+//   restarted      {}            an automatic reconnect re-sent `start` (follows its `connected`)
 //   disconnected   {willRetry: boolean}
 //   reconnecting   {attempt, delayMs}
 //   gaveup         {}            all reconnect attempts failed
@@ -17,6 +19,9 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 export class KettleBle extends EventTarget {
   #device = null;
   #control = null;
+  #status = null;
+  #reading = false; // a readStatus() is in flight
+  #lastStatusValue = null; // DataView of the last status event, to spot a read's own event
   #streaming = false; // a `start` was sent and no `stop` since: re-send it after a reconnect
   #userClosed = false;
   #generation = 0; // bumped on every connect/disconnect so stale retry loops stop
@@ -102,16 +107,38 @@ export class KettleBle extends EventTarget {
     imu.addEventListener("characteristicvaluechanged", this.#onImu);
     status.addEventListener("characteristicvaluechanged", this.#onStatus);
     await Promise.all([imu.startNotifications(), status.startNotifications()]);
+    this.#status = status;
     this.#control = control;
   }
 
-  #onImu = (e) => this.#onValue("imu", e);
-  #onStatus = (e) => this.#onValue("status", e);
+  /**
+   * Reads status with a GATT read and emits it as a `status` event with source "read". Long reads
+   * are not limited by the ATT MTU, so this gets all 28 bytes when notifications are truncated.
+   * Browsers following the spec also fire characteristicvaluechanged for the read (with the same
+   * DataView); that event is then the one emitted, so the value is emitted once either way.
+   */
+  async readStatus() {
+    if (!this.#control) throw new Error("not connected");
+    if (this.#reading) return;
+    this.#reading = true;
+    let dv;
+    try {
+      dv = await this.#status.readValue();
+    } finally {
+      this.#reading = false;
+    }
+    if (dv !== this.#lastStatusValue) this.#emitValue("status", dv, { source: "read" });
+  }
 
-  #onValue(type, e) {
-    const dv = e.target.value;
+  #onImu = (e) => this.#emitValue("imu", e.target.value);
+  #onStatus = (e) => {
+    this.#lastStatusValue = e.target.value;
+    this.#emitValue("status", e.target.value, { source: this.#reading ? "read" : "notify" });
+  };
+
+  #emitValue(type, dv, extra = {}) {
     const bytes = new Uint8Array(dv.buffer.slice(dv.byteOffset, dv.byteOffset + dv.byteLength));
-    this.#emit(type, { bytes, phoneMs: phoneNow() });
+    this.#emit(type, { bytes, phoneMs: phoneNow(), ...extra });
   }
 
   #onDrop = () => {
@@ -140,8 +167,10 @@ export class KettleBle extends EventTarget {
       try {
         await this.#setup();
         if (gen !== this.#generation) return;
-        if (this.#streaming) await this.#control.writeValueWithResponse(encodeCommand("start"));
+        const restart = this.#streaming;
+        if (restart) await this.#control.writeValueWithResponse(encodeCommand("start"));
         this.#emit("connected", { reconnect: true });
+        if (restart) this.#emit("restarted");
         return;
       } catch (err) {
         console.warn(`reconnect attempt ${i + 1} failed`, err);

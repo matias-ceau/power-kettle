@@ -9,6 +9,8 @@ export class Recorder {
   #samples = 0;
   #packets = 0;
   #gaps = 0;
+  #runs = 0;
+  #prevFirst = null; // first_index of the previous packet
   #nextIndex = null; // first_index expected next; null before the first packet
   #lastStatus = null;
   #firstImuMs = null;
@@ -21,7 +23,8 @@ export class Recorder {
   /**
    * Gaps are judged from first_index continuity (same rule as the Python reader), so the u16
    * `seq` wrapping is irrelevant. A first_index that goes backwards means the device restarted:
-   * that begins a new run and is not a gap.
+   * that begins a new run and is not a gap. Runs are split exactly as the Python reader does
+   * (first_index below the previous packet's), so `runs` matches `powerkettle info`.
    */
   onImu(bytes, phoneMs) {
     const dv = dvOf(bytes);
@@ -31,6 +34,8 @@ export class Recorder {
       throw new Error(`IMU packet length ${bytes.length} != ${expected} for n=${h.n}`);
     }
     if (this.#nextIndex !== null && h.firstIndex > this.#nextIndex) this.#gaps++;
+    if (this.#prevFirst === null || h.firstIndex < this.#prevFirst) this.#runs++;
+    this.#prevFirst = h.firstIndex;
     this.#nextIndex = h.firstIndex + h.n;
     this.#packets++;
     this.#samples += h.n;
@@ -58,6 +63,7 @@ export class Recorder {
       samples: this.#samples,
       packets: this.#packets,
       gaps: this.#gaps,
+      runs: this.#runs,
       lastStatus: this.#lastStatus,
       durationS: this.#firstImuMs === null ? 0 : (this.#lastImuMs - this.#firstImuMs) / 1000,
     };

@@ -1,6 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { pkrawFilename, formatDuration, measuredRateHz, buildMeta, isLowBattery, MARKERS } from "../js/format.js";
+import {
+  pkrawFilename, formatDuration, measuredRateHz, buildMeta, isLowBattery, MARKERS,
+  isTruncatedStatus, StreamingWatch, START_ACK_TIMEOUT_MS,
+} from "../js/format.js";
 
 test("pkrawFilename uses local time, zero padded", () => {
   assert.equal(pkrawFilename(new Date(2026, 0, 5, 7, 8, 9)), "pk-20260105-070809.pkraw");
@@ -35,4 +38,26 @@ test("isLowBattery reads status flag bit1", () => {
 
 test("MARKERS lists the brief's exercise markers", () => {
   assert.deepEqual(MARKERS, ["snatch L", "snatch R", "swing 2H", "swing L", "swing R", "rest", "overhead hold", "table lift"]);
+});
+
+test("isTruncatedStatus: exactly 20 bytes is a status cut to MTU 23 - 3", () => {
+  assert.equal(isTruncatedStatus(new Uint8Array(20)), true);
+  assert.equal(isTruncatedStatus(new Uint8Array(28)), false);
+  assert.equal(isTruncatedStatus(new Uint8Array(19)), false);
+});
+
+test("StreamingWatch flags a start the device ignores for more than 2 s", () => {
+  assert.equal(START_ACK_TIMEOUT_MS, 2000);
+  const w = new StreamingWatch();
+  assert.equal(w.stalled(10_000), false); // never started
+  w.started(1000);
+  w.status(0b00, 1500); // idle status: flag still clear
+  assert.equal(w.stalled(3000), false);   // exactly 2 s: not yet
+  assert.equal(w.stalled(3001), true);
+  w.status(0b01, 3100);                   // streaming flag seen
+  assert.equal(w.stalled(9000), false);
+  w.started(10_000);                      // a re-sent start re-arms the watch
+  assert.equal(w.stalled(12_500), true);
+  w.stop();
+  assert.equal(w.stalled(20_000), false);
 });

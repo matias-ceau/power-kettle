@@ -5,6 +5,10 @@ export const MARKERS = Object.freeze([
 ]);
 
 const LOW_BATTERY_FLAG = 0b10;
+const STREAMING_FLAG = 0b01;
+// A 28-byte status notified at the default ATT MTU of 23 arrives cut to MTU - 3 = 20 bytes.
+const TRUNCATED_STATUS_BYTES = 20;
+export const START_ACK_TIMEOUT_MS = 2000;
 
 const pad = (n, w = 2) => String(n).padStart(w, "0");
 
@@ -34,4 +38,32 @@ export function buildMeta(userAgent, now = new Date()) {
 
 export function isLowBattery(status) {
   return status != null && (status.flags & LOW_BATTERY_FLAG) !== 0;
+}
+
+/** True for a status notification cut short by a too-small Bluetooth MTU. */
+export function isTruncatedStatus(bytes) {
+  return bytes.length === TRUNCATED_STATUS_BYTES;
+}
+
+/** Notices a `start` the device ignores: status bit0 (streaming) still clear 2 s after it. */
+export class StreamingWatch {
+  #sentAt = null; // ms of the last start; null when not watching
+  #seen = false;
+
+  started(nowMs) {
+    this.#sentAt = nowMs;
+    this.#seen = false;
+  }
+
+  stop() {
+    this.#sentAt = null;
+  }
+
+  status(flags) {
+    if (flags & STREAMING_FLAG) this.#seen = true;
+  }
+
+  stalled(nowMs) {
+    return this.#sentAt !== null && !this.#seen && nowMs - this.#sentAt > START_ACK_TIMEOUT_MS;
+  }
 }
