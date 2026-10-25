@@ -27,9 +27,10 @@ recordings. The analysis comes in milestone 2.
 
 ## Safety rule for the device
 
-**Slide switch OFF before plugging anything into the C3's USB-C. Charge ONLY
-through the TP4056's USB-C port.** See the build guide for why (and for the
-mandatory charge-current resistor change on the TP4056 board).
+**Slide switch OFF whenever a USB cable is in the C3. Charge and flash through
+the C3's USB-C only** (the TP4056's own port stays unused). See the build guide
+for why, and for the mandatory charge-current resistor change on the TP4056
+board.
 
 ## Checking a recording
 
@@ -42,7 +43,8 @@ python -m powerkettle info FILE.pkraw
 ```
 
 The output shows the duration, number of runs, samples, estimated sample rate,
-gaps and dropped samples, and the markers you tapped during recording.
+gaps and dropped samples, the sensor noise in the quietest second (a bench
+check), and the markers you tapped during recording.
 
 ## Repository layout
 

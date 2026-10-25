@@ -56,32 +56,46 @@ can be re-analysed when the algorithms improve.
 
 | Part | Notes |
 |---|---|
-| ESP32-C3 SuperMini | Owned. BLE 5, USB-C (flashing). Onboard 3.3 V LDO. |
+| ESP32-C3 SuperMini | Owned. BLE 5, USB-C: the single port for charging, flashing and the serial log. Powered on its 3V3 pin from the buck (its onboard LDO only runs when USB is plugged in). |
 | BMI160 breakout (purple GY-BMI160) | Owned. ±16 g accel, ±2000 °/s gyro, 1 KB FIFO. Chosen over the MPU-9250 board: smaller, current part (MPU-9250 discontinued, boards often relabelled MPU-6500 clones), and a magnetometer is useless on an iron bell. |
-| 1S LiPo ~300 mAh (e.g. 402535) | ~5 h streaming. |
-| TP4056 USB-C charger **with protection** (DW01A + 8205A, 6-pad) | Charging + over-discharge protection. Separate USB-C port used only for charging. **Charge-current fix (mandatory):** modules ship with R_PROG = 1.2 kΩ (I ≈ 1200/R = 1000 mA ≈ 3.3C for a 300 mAh cell); replace it (next to TP4056 pin 2, marked "122") with **4.7 kΩ** (≈ 255 mA, below 1C). Charge with the slide switch OFF so charge termination works. |
+| 1S LiPo ~300 mAh (e.g. 402535) | ~4 h streaming through boost + buck (measured by the soak test). |
+| TP4056 USB-C charger **with protection** (DW01A + 8205A, 6-pad: IN±, B±, OUT±) | Charging + over-discharge protection. Charged from the C3's USB-C through IN+/IN−; its own USB-C port is unused. **Charge-current fix (mandatory):** modules ship with R_PROG = 1.2 kΩ (I ≈ 1200/R = 1000 mA ≈ 3.3C for a 300 mAh cell, and more than a computer USB port supplies); replace it (next to TP4056 pin 2, marked "122") with **4.7 kΩ** (≈ 255 mA, below 1C). |
 | 4.7 kΩ resistor (SMD) | Replaces R_PROG on the TP4056 (see above). |
-| Schottky diode (SS14 or 1N5817) | In series between the slide switch and the C3 5V pad (anode switch side, cathode/band C3 side). The SuperMini 5V pad is USB VBUS and on a protected TP4056 OUT+ is the B+ net, so without the diode a C3 USB cable with the switch ON would force 5 V into the LiPo, bypassing the charger. |
-| Slide switch | Battery on/off. |
+| Small 5 V boost | Owned. Battery (3.0–4.2 V) → 5 V for the buck. May later be replaced by an adjustable XL6009-type set to 6–7 V. |
+| 3.3 V buck (Mini560 type, marked EY9 / GMH3J) | Owned. 5 V → 3.3 V into the C3 3V3 pin. Needs ≈ 5 V input, hence the boost. |
+| Slide switch | Battery on/off, before the boost. |
 | 2 × 100 kΩ | Battery voltage divider. |
 | Pot magnet 20–25 mm, countersunk | Shear ≈ 30 N vs ≈ 7 N for a ~30 g device at 20 g impact. |
-| Small ABS project box (~50 × 35 × 15 mm), epoxy | No 3D printer available. |
+| Small ABS project box (~60 × 40 × 20 mm), epoxy | No 3D printer available. |
 
-No buck/boost converter is needed: LiPo → switch → diode → SuperMini 5V pin →
-onboard LDO. The diode costs ~0.3 V, so the 3.3 V rail starts to sag below
-~3.7 V battery but stays ≥ 3.0 V down to ~3.4 V (~90 % of capacity); the
-3500 mV low-battery threshold remains appropriate.
+Power path (the lifter's layout): LiPo → TP4056 B± ; TP4056 OUT+ → switch → boost
+(5 V) → buck (3.3 V) → C3 3V3 (+ BMI160 3V3). Charging: C3 USB-C → C3 5V pin (USB
+VBUS) → TP4056 IN+, C3 GND → IN−. Boost + buck ≈ 78 % efficient (a 3.3 V LDO would be
+≈ 87 %); accepted for using parts on hand.
 
-Rule: slide switch OFF before plugging anything into the C3's USB-C; charge ONLY
-through the TP4056's USB-C port.
+Consequences:
+
+- The 3.3 V rail stays regulated almost down to the DW01A cut-off (≈ 2.5 V), so the
+  device no longer browns out near empty. The 3500 mV low-battery warning is the
+  user's cue to stop and charge.
+- Rule: slide switch OFF whenever USB is plugged into the C3 (otherwise the buck and
+  the C3's onboard LDO both drive the 3V3 rail, and the charger never terminates
+  because the load draws from the battery node). Never use the TP4056's own USB-C
+  port (it is tied to the C3's VBUS).
+- The buck output is verified (3.25–3.35 V, ≥ 3.2 V at 70 mA) before it is connected
+  to the C3.
 
 ### 3.2 Wiring
 
 | From | To |
 |---|---|
 | LiPo | TP4056 B+ / B− |
-| TP4056 OUT+ | slide switch → Schottky diode (anode switch side, band C3 side) → C3 **5V** |
-| TP4056 OUT− | C3 **GND** (this is circuit ground; B− is the unprotected battery side and is not ground) |
+| TP4056 OUT+ | slide switch → boost IN+ |
+| TP4056 OUT− | boost IN− (this is circuit ground; B− is the unprotected battery side and is not ground) |
+| boost OUT+ / OUT− | buck IN+ / IN− |
+| buck OUT+ / OUT− | C3 **3V3** / **GND** |
+| C3 **5V** (USB VBUS) | TP4056 **IN+** (nothing else on this pin) |
+| C3 GND | TP4056 **IN−** (same net as OUT− on the protected module; verified by continuity) |
 | C3 **3V3** | BMI160 **3V3** (bypass its LDO) |
 | C3 GND | BMI160 GND |
 | C3 **GPIO6** | BMI160 **SDA** |

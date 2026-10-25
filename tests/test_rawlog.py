@@ -11,6 +11,7 @@ from powerkettle.protocol import Status
 from powerkettle.rawlog import (
     RawLog,
     RawRecord,
+    Run,
     estimate_rate,
     read_rawlog,
     to_recording,
@@ -249,3 +250,29 @@ def test_info_estimated_rate_not_marked_nominal(tmp_path):
     out = subprocess.run([sys.executable, "-m", "powerkettle", "info", str(tmp_path/"a.pkraw")],
                          check=True, capture_output=True, text=True).stdout
     assert "rate 402.00 Hz," in out and "nominal" not in out
+
+
+def _still_run(n, rate=400.0, noise_counts=(4.0, 1.5), seed=0):
+    rng = np.random.default_rng(seed)
+    raw = np.zeros((n, 6))
+    raw[:, 2] = 2048.0  # +1 g on z at +-16 g (2048 LSB/g)
+    raw[:, :3] += rng.normal(0.0, noise_counts[0], (n, 3))
+    raw[:, 3:] += rng.normal(0.0, noise_counts[1], (n, 3))
+    return Run(sample_index=np.arange(n, dtype=np.int64), raw=np.round(raw).astype(np.int16),
+               gaps=[], statuses=[], rate_hz=rate, acc_range_g=16, gyro_range_dps=2000)
+
+
+def test_still_noise_picks_quietest_second():
+    from powerkettle.__main__ import still_noise
+    run = _still_run(4000)
+    run.raw[:2000, :] += np.int16(300)  # wobble: the first 5 s are not still
+    run.raw[:2000:2, :] -= np.int16(600)
+    acc_mg, gyro_dps, g = still_noise(run)
+    assert acc_mg == pytest.approx(4.0 * 16000 / 32768, rel=0.15)
+    assert gyro_dps == pytest.approx(1.5 * 2000 / 32768, rel=0.15)
+    assert g == pytest.approx(1.0, abs=0.01)
+
+
+def test_still_noise_short_run_is_none():
+    from powerkettle.__main__ import still_noise
+    assert still_noise(_still_run(100)) is None

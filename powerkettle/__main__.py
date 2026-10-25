@@ -22,6 +22,8 @@ import math
 import sys
 from pathlib import Path
 
+import numpy as np
+
 from .bell import BellProfile
 from .calibration import CalibrationError
 from .pipeline import WARN_CARRIED_CALIBRATION, SessionResult, analyse_run, map_markers
@@ -32,6 +34,24 @@ from .session_io import (
     load_session,
     save_session,
 )
+
+
+def still_noise(run: Run) -> tuple[float, float, float] | None:
+    """(accelerometer noise in mg, gyro noise in deg/s, |acc| in g) over the quietest 1 s window
+    of `run`; noise is the largest per-axis standard deviation in that window. None when the run
+    is shorter than 1 s. A bench check that the sensor (and its power supply) is quiet at rest."""
+    w = max(1, round(run.rate_hz))
+    k = run.raw.shape[0] // w
+    if k == 0:
+        return None
+    raw = run.raw[:k * w].astype(np.float64).reshape(k, w, 6)
+    acc_lsb_mg = run.acc_range_g * 1000.0 / 32768.0
+    gyro_lsb_dps = run.gyro_range_dps / 32768.0
+    acc_mg = raw[:, :, :3].std(axis=1).max(axis=1) * acc_lsb_mg  # (k,)
+    gyro_dps = raw[:, :, 3:].std(axis=1).max(axis=1) * gyro_lsb_dps
+    best = int(np.argmin(acc_mg + 10.0 * gyro_dps))  # at rest both terms are a few units
+    g = float(np.linalg.norm(raw[best, :, :3].mean(axis=0))) * acc_lsb_mg / 1000.0
+    return float(acc_mg[best]), float(gyro_dps[best]), g
 
 
 def info(path: str) -> str:
@@ -53,6 +73,10 @@ def info(path: str) -> str:
             f"{r.acc_range_g} g / {r.gyro_range_dps} dps, "
             f"gaps {len(r.gaps)} ({dropped} samples dropped)"
         )
+        still = still_noise(r)
+        if still is not None:
+            lines.append(f"    quietest 1 s: acc noise {still[0]:.1f} mg, gyro noise {still[1]:.2f} °/s, "
+                         f"|acc| {still[2]:.3f} g")
     total_gaps = sum(len(r.gaps) for r in rec.runs)
     total_dropped = sum(b - a - 1 for r in rec.runs for a, b in r.gaps)
     lines.append(f"gaps: {total_gaps} ({total_dropped} samples dropped)")
