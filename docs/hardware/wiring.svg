@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1070 800" width="1070" height="800" role="img" aria-labelledby="t d" font-family="Helvetica, Arial, sans-serif">
   <title id="t">Power Kettle wiring diagram</title>
-  <desc id="d">LiPo to TP4056 B+ and B-; B- is not ground. TP4056 OUT+ through the slide switch to the 5 V boost input; boost 5 V output to the 3.3 V buck input; buck 3.3 V output to the ESP32-C3 3V3 pin, which also feeds the BMI160 3V3 pin. OUT-, the boost and buck minus pads, C3 GND and BMI160 GND are ground. The C3 5V pin (USB 5 V) goes to TP4056 IN+ and C3 GND to TP4056 IN-, so the C3's USB-C port charges the battery. C3 GPIO6 SDA, GPIO7 SCL and GPIO3 INT1 go to the BMI160. Battery divider from OUT+ before the switch through two 100 kilohm resistors to GPIO4 and ground. BMI160 CS tied high and SAO tied low. Rule: slide switch off whenever a USB cable is in the C3; charge and flash through the C3's USB-C only.</desc>
+  <desc id="d">LiPo to TP4056 B+ and B-; B- is not ground. TP4056 OUT+ through the slide switch to the 5 V boost input; boost 5 V output to the ESP32-C3 5V pin, whose onboard regulator makes 3.3 V. OUT-, the boost minus pads, C3 GND and BMI160 GND are ground. C3 3V3, GND, GPIO6 SDA, GPIO7 SCL and GPIO3 INT1 go to the BMI160. Battery divider from OUT+ before the switch through two 100 kilohm resistors to GPIO4 and ground. BMI160 CS tied high and SAO tied low. Charging through the TP4056 USB-C port. Rule: slide switch off while any USB cable is plugged in.</desc>
   <style>
     .bg { fill: #fbfaf6; stroke: #333; stroke-width: 1; }
     .box { fill: #eef1f6; stroke: #222; stroke-width: 2; }
@@ -18,7 +18,6 @@
     .pos { stroke: #b3261e; }
     .v5 { stroke: #d9480f; }
     .v33 { stroke: #c2185b; }
-    .usb { stroke: #6d4c41; }
     .gnd { stroke: #222; }
     .bm { stroke: #0b7a75; }
     .sda { stroke: #1f5fbf; }
@@ -29,7 +28,7 @@
   </style>
 
   <rect class="bg" x="0.5" y="0.5" width="1069" height="799" rx="6"/>
-  <text class="ttl" x="20" y="26">Power Kettle wiring (red = battery, orange = 5 V, pink = 3.3 V, brown = USB 5 V, black = ground)</text>
+  <text class="ttl" x="20" y="26">Power Kettle wiring (red = battery, orange = 5 V, pink = 3.3 V, black = ground, teal = battery B&#8722; only)</text>
 
   <!-- LiPo -->
   <rect class="box" x="30" y="60" width="120" height="80" rx="6"/>
@@ -43,13 +42,13 @@
   <text class="ttl" x="285" y="66" text-anchor="middle">TP4056</text>
   <text class="sub" x="285" y="160" text-anchor="middle">protected (DW01A + 8205A)</text>
   <text class="sub" x="285" y="176" text-anchor="middle">R_PROG = 4.7 k&#937;</text>
-  <text class="sub" x="285" y="192" text-anchor="middle">its own USB-C: not used</text>
+  <text class="sub" x="285" y="200" text-anchor="middle">USB-C = CHARGE</text>
+  <text class="sub" x="285" y="216" text-anchor="middle">(switch OFF)</text>
+  <text class="sub" x="285" y="252" text-anchor="middle">IN+ / IN&#8722; unused</text>
   <text class="pin" x="208" y="86">B+</text>
   <text class="pin" x="208" y="126">B&#8722;</text>
   <text class="pin" x="362" y="86" text-anchor="end">OUT+</text>
   <text class="pin" x="362" y="126" text-anchor="end">OUT&#8722;</text>
-  <text class="pin" x="240" y="260" text-anchor="middle">IN+</text>
-  <text class="pin" x="310" y="260" text-anchor="middle">IN&#8722;</text>
 
   <!-- LiPo to TP4056: + red, B- teal (NOT ground) -->
   <path class="w pos" d="M150 82 H200"/>
@@ -73,32 +72,16 @@
   <text class="pin" x="652" y="86" text-anchor="end">OUT+</text>
   <text class="pin" x="652" y="126" text-anchor="end">OUT&#8722;</text>
 
-  <!-- Boost to buck -->
-  <path class="w v5" d="M660 82 H700"/>
-  <path class="w gnd" d="M660 122 H700"/>
-  <text class="sub" x="680" y="74" text-anchor="middle">5 V</text>
-
-  <!-- Buck -->
-  <rect class="reg" x="700" y="40" width="130" height="110" rx="6"/>
-  <text class="ttl" x="765" y="66" text-anchor="middle">Buck</text>
-  <text class="sub" x="765" y="106" text-anchor="middle">3.3 V out</text>
-  <text class="pin" x="708" y="86">IN+</text>
-  <text class="pin" x="708" y="126">IN&#8722;</text>
-  <text class="pin" x="822" y="86" text-anchor="end">OUT+</text>
-  <text class="pin" x="822" y="126" text-anchor="end">OUT&#8722;</text>
-
-  <!-- Buck 3.3 V down to the 3V3 line; buck ground down to the GND line (hop over 3V3) -->
-  <path class="w v33" d="M830 82 H880 V340"/>
-  <circle class="dot" cx="880" cy="340" r="5"/>
-  <path class="w gnd" d="M830 122 H850 V334 a6 6 0 0 1 0 12 V380"/>
-  <circle class="dot" cx="850" cy="380" r="5"/>
-  <text class="sub" x="888" y="200">3.3 V</text>
+  <!-- Boost 5 V and ground down to the C3's top pins -->
+  <path class="w v5" d="M660 82 H730 V300"/>
+  <path class="w gnd" d="M660 122 H690 V300"/>
+  <text class="sub" x="738" y="200">5 V</text>
 
   <!-- ESP32-C3 -->
   <rect class="box" x="580" y="300" width="200" height="260" rx="6"/>
   <text class="ttl" x="680" y="384" text-anchor="middle">ESP32-C3</text>
   <text class="sub" x="680" y="400" text-anchor="middle">SuperMini</text>
-  <text class="sub" x="655" y="474" text-anchor="middle">USB-C: charge + flash</text>
+  <text class="sub" x="655" y="474" text-anchor="middle">USB-C: flashing</text>
   <text class="sub" x="655" y="488" text-anchor="middle">(switch OFF first)</text>
   <text class="pin" x="588" y="444">GPIO4</text>
   <text class="pin" x="772" y="344" text-anchor="end">3V3</text>
@@ -106,8 +89,8 @@
   <text class="pin" x="772" y="424" text-anchor="end">GPIO6</text>
   <text class="pin" x="772" y="464" text-anchor="end">GPIO7</text>
   <text class="pin" x="772" y="504" text-anchor="end">GPIO3</text>
-  <text class="pin" x="650" y="550" text-anchor="middle">GND</text>
-  <text class="pin" x="710" y="550" text-anchor="middle">5V</text>
+  <text class="pin" x="690" y="318" text-anchor="middle">GND</text>
+  <text class="pin" x="730" y="318" text-anchor="middle">5V</text>
 
   <!-- BMI160 -->
   <rect class="box" x="900" y="300" width="140" height="320" rx="6"/>
@@ -136,12 +119,6 @@
   <path class="w gnd" d="M900 580 H870"/>
   <text class="sub" x="866" y="584" text-anchor="end">tie to GND</text>
 
-  <!-- USB 5 V and ground from the C3 to the TP4056 input (this is how the C3's USB-C charges) -->
-  <path class="w usb" d="M240 270 V620 H710 V560"/>
-  <path class="w gnd" d="M310 270 V595 H650 V560"/>
-  <text class="sub" x="470" y="638" text-anchor="middle">C3 5V (USB 5 V) &#8594; TP4056 IN+</text>
-  <text class="sub" x="470" y="588" text-anchor="middle">C3 GND &#8594; TP4056 IN&#8722;</text>
-
   <!-- Battery divider, tapped on OUT+ before the switch -->
   <circle class="dot" cx="392" cy="82" r="5"/>
   <path class="w pos" d="M392 82 V170"/>
@@ -169,12 +146,12 @@
   <text class="note" x="40" y="246">Ground = OUT&#8722;.</text>
 
   <!-- Notes -->
-  <text class="note" x="30" y="672">Measure the buck output (3.2 to 3.4 V) BEFORE wiring it to the C3: 5 V on the 3V3 pin destroys the C3 and the sensor.</text>
-  <text class="note" x="30" y="690">Ground: TP4056 OUT&#8722; and IN&#8722;, boost and buck &#8722; pads, C3 GND, BMI160 GND. Black wire hop = no connection.</text>
-  <text class="note" x="30" y="708">Nothing goes to the C3's own 5V pin except the wire to TP4056 IN+. The BMI160 is fed from the 3V3 line, not its VIN pin.</text>
+  <text class="note" x="30" y="672">Measure the boost output (4.9 to 5.3 V, never above 5.5 V) BEFORE wiring it to the C3. It goes to the C3's 5V pin, not 3V3.</text>
+  <text class="note" x="30" y="690">Ground: TP4056 OUT&#8722;, boost &#8722; pads, C3 GND, BMI160 GND. Black wire hop = no connection.</text>
+  <text class="note" x="30" y="708">The C3's own regulator makes the 3.3 V. The BMI160 is fed from the C3's 3V3 pin, not its VIN pin.</text>
   <text class="note" x="30" y="726">Do not use GPIO2, GPIO8 or GPIO9. Check the CS / SAO labels on your board's silkscreen.</text>
 
   <!-- Rule -->
   <rect class="rule" x="20" y="752" width="1030" height="32" rx="6"/>
-  <text class="wt" x="535" y="773" text-anchor="middle">RULE: slide switch OFF whenever a USB cable is in the C3. Charge and flash through the C3's USB-C only; never plug in the TP4056's own port.</text>
+  <text class="wt" x="535" y="773" text-anchor="middle">RULE: slide switch OFF while any USB cable is plugged in (C3 for flashing, TP4056 for charging).</text>
 </svg>

@@ -27,10 +27,9 @@ recordings. The analysis comes in milestone 2.
 
 ## Safety rule for the device
 
-**Slide switch OFF whenever a USB cable is in the C3. Charge and flash through
-the C3's USB-C only** (the TP4056's own port stays unused). See the build guide
-for why, and for the mandatory charge-current resistor change on the TP4056
-board.
+**Slide switch OFF while any USB cable is plugged in.** Charge through the
+TP4056's USB-C port; the C3's USB-C is for flashing. See the build guide for
+why, and for the mandatory charge-current resistor change on the TP4056 board.
 
 ## Checking a recording
 

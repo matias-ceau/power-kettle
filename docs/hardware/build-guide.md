@@ -37,8 +37,8 @@ Inside:
   the bell moves 400 times per second;
 - an **ESP32-C3 SuperMini**, a thumb-sized computer with Bluetooth that reads
   the sensor and sends the numbers to your phone;
-- a **LiPo battery** with a **TP4056** charger board, a **slide switch**, a
-  small **5 V boost** board and a **3.3 V buck** board.
+- a **LiPo battery** with a **TP4056** charger board, a **slide switch** and a
+  small **5 V boost** board.
 
 The box does no analysis. It just sends raw numbers; the phone saves them and
 a Python program analyses them later.
@@ -46,41 +46,39 @@ a Python program analyses them later.
 Power in two lines:
 
 - **Running:** LiPo, TP4056 (it also cuts the battery off if it gets too
-  empty), slide switch, boost (battery 3.0 to 4.2 V up to 5 V), buck (5 V
-  down to a steady 3.3 V), the C3's **3V3** pin. The sensor shares that 3.3 V.
-- **Charging:** a USB cable in the **C3's** USB-C. The C3's **5V** pin
-  carries the USB 5 V, and it is wired to the TP4056's **IN+**, so the C3's
-  port charges the battery. One port for charging, flashing and the serial
-  log; the TP4056's own USB-C port stays unused.
+  empty), slide switch, boost (battery 3.0 to 4.2 V up to a steady 5 V), the
+  C3's **5V** pin. The C3's own regulator turns that into 3.3 V, which also
+  powers the sensor.
+- **Charging:** a USB cable in the **TP4056's** USB-C port, switch OFF. The
+  C3's USB-C is for flashing and the serial log.
 
 ## 2. Parts and tools
 
 | Part | Notes | Search terms |
 |---|---|---|
-| ESP32-C3 SuperMini | Owned. Bluetooth 5, USB-C (charging, flashing, serial log). | "ESP32-C3 SuperMini" |
+| ESP32-C3 SuperMini | Owned. Bluetooth 5, USB-C (flashing and serial log). Has an onboard 3.3 V regulator fed from its 5V pin. | "ESP32-C3 SuperMini" |
 | BMI160 breakout (purple GY-BMI160) | Owned. The motion sensor. | "GY-BMI160" |
-| 1S LiPo battery, about 300 mAh, e.g. size 402535 | About 4 h of streaming with the boost and buck (the soak test measures yours). Mind the plug type (section 5, step 3). | "402535 3.7V 300mAh lipo" |
-| TP4056 USB-C charger **with protection** | The protected version has **two extra small chips next to the TP4056 chip, marked DW01A and 8205A**, and 6 solder pads: **IN+, IN−** (the USB input, next to the USB-C connector), **B+, B−** (battery), **OUT+, OUT−** (load). The plain 4-pad one has no over-discharge protection; do not use it. | "TP4056 type-c 6 pin protection DW01" |
-| **4.7 kΩ resistor** (SMD, same size as the one you are replacing, probably 0805 or 0603) | **Mandatory.** Replaces the TP4056's charge-current resistor so the battery is charged gently and the USB port is not overloaded (section 5, step 1). | "4.7k ohm resistor SMD 0805" (or 0603) |
-| Small **5 V boost** board | Owned. Battery voltage up to 5 V for the buck. Any small board that starts from 3 V or less and gives at least 300 mA. Later you can swap in an adjustable one (XL6009 type) set to 6 to 7 V; set and measure its output **before** connecting the buck, because those can output far more than the buck accepts. | "mini boost 5V 3.7V" |
-| **3.3 V buck** board (Mini560 type) | Owned (marked EY9, chip GMH3J). Makes the steady 3.3 V. It wants about 5 V or more at its input, which is why the boost sits in front of it. | "Mini560 3.3V" |
+| 1S LiPo battery, about 300 mAh, e.g. size 402535 | About 3 h of streaming (the soak test measures yours). Mind the plug type (section 5, step 3). | "402535 3.7V 300mAh lipo" |
+| TP4056 USB-C charger **with protection** | The protected version has **two extra small chips next to the TP4056 chip, marked DW01A and 8205A**, and 6 solder pads: IN+, IN− (not used: its USB-C port is the input), **B+, B−** (battery), **OUT+, OUT−** (load). The plain 4-pad one has no over-discharge protection; do not use it. Its USB-C port is the charging port. | "TP4056 type-c 6 pin protection DW01" |
+| **4.7 kΩ resistor** (SMD, same size as the one you are replacing, probably 0805 or 0603) | **Mandatory.** Replaces the TP4056's charge-current resistor so the battery is charged gently (section 5, step 1). | "4.7k ohm resistor SMD 0805" (or 0603) |
+| Small **5 V boost** board | Owned. Battery voltage up to 5 V for the C3's 5V pin. Any small board that starts from 3 V or less and gives at least 200 mA. If you later swap in an adjustable one (XL6009 type), set it to **5.0 V and measure it before connecting the C3**: those can output far more than the C3 survives. | "mini boost 5V 3.7V" |
 | Slide switch | Battery on/off. Small SPDT or SPST slide switch. | "SS12D00 slide switch" or "mini slide switch 3 pin" |
 | 2 x 100 kΩ resistors | Battery voltage divider (quarter-watt, any 1 % or 5 %). | "100k ohm resistor 1/4W" |
-| 47 Ω resistor, quarter-watt (test only) | A dummy load to check the buck before it meets the C3 (section 5, step 4). Gets warm; that is normal. | "47 ohm resistor 1/4W" |
+| 100 Ω resistor, half-watt (test only) | A dummy load to check the boost before it meets the C3 (section 5, step 4). Gets warm; that is normal. | "100 ohm resistor 1/2W" |
 | Pot magnet, 20 to 25 mm, countersunk | Holds the box on the bell. Pull strength matters: about 30 N shear against about 7 N needed. | "pot magnet 25mm countersunk neodymium" |
-| Small ABS project box, about 60 x 40 x 20 mm | The boost and buck boards need a little more room than before. No 3D printer needed. | "ABS enclosure 60x40x20" |
+| Small ABS project box, about 60 x 40 x 20 mm | No 3D printer needed. | "ABS enclosure 60x40x20" |
 | Two-part epoxy (5 to 30 min type) | For magnet and sensor board. | "epoxy AB 5 minute" |
 
 Also: thin hookup wire (silicone, 26 to 30 AWG, red, black and a few other
 colours), heat-shrink tubing or Kapton tape, a thin rubber pad or a steel
 washer (see section 9), a **2-pin connector pigtail that matches your
 battery's plug** (strongly recommended, section 5, step 3), and masking tape
-and a marker for labelling the box.
+and a marker for labelling the two USB ports.
 
 Tools: soldering iron with a fine tip, solder, flux (helps a lot on small
 pads), solder wick, wire cutters and strippers, **multimeter** (resistance,
 continuity beep, DC voltage), tweezers, a USB **data** cable (not a
-charge-only cable), and a desktop or laptop with Chrome.
+charge-only cable) for flashing, and a desktop or laptop with Chrome.
 
 Safety with the LiPo: never short the two wires together, never puncture or
 bend the cell, never solder on it while it is connected to anything powered,
@@ -89,19 +87,15 @@ smells, disconnect it and stop using it.
 
 ## 3. Wiring
 
-> **RULE: Slide switch OFF whenever a USB cable is in the C3. Charge and
-> flash through the C3's USB-C only; never plug anything into the TP4056's
-> own USB-C port.**
+> **RULE: Slide switch OFF while any USB cable is plugged in: the C3's
+> (flashing, serial log) or the TP4056's (charging).**
 >
-> Why switch OFF: with a cable in, the C3 runs from USB and the TP4056
-> charges the battery. If the switch is also ON, the boost and buck feed the
-> same 3.3 V line as the C3's own regulator (two regulators fighting), and the
-> charger never sees the battery as full, so it never stops. A moment of
-> forgetting will not break anything; just do not leave it like that.
->
-> Why not the TP4056's port: it is wired straight to the C3's USB 5 V. A
-> cable in each port at once would connect two power supplies together.
-> Put tape over the TP4056's port.
+> Why: with a cable in the C3 and the switch ON, the boost and the computer
+> both drive the C3's 5V pin. The boost blocks current going backwards, so
+> the battery is safe, but two supplies on one pin is still not something to
+> leave. While charging, the switch must be OFF so the charger sees the
+> battery as full and stops. Label the ports on the box: **"C3: switch OFF
+> first"** and **"CHARGE (switch OFF)"**.
 
 ![Wiring diagram](wiring.svg)
 
@@ -113,13 +107,9 @@ Plain-text version of the same wiring (if the picture does not display, open
 | LiPo | TP4056 **B+** / **B−** | Battery connects to the charger board's battery pads. **B− is NOT ground.** Only the battery's negative wire goes to B−; the ground of the circuit is **OUT−**. B− is the unprotected battery side: anything else connected to it bypasses the protection chip. |
 | TP4056 **OUT+** | slide switch → boost **IN+** | The switch cuts power to everything after it. |
 | TP4056 **OUT−** | boost **IN−** | Ground. |
-| boost **OUT+** (5 V) | buck **IN+** | |
-| boost **OUT−** | buck **IN−** | Ground. |
-| buck **OUT+** (3.3 V) | C3 **3V3** | Powers the C3 directly on its 3.3 V pin. **Measure the buck output before making this connection** (section 5, step 4). |
-| buck **OUT−** | C3 **GND** | Ground. |
-| C3 **5V** | TP4056 **IN+** | The C3's 5V pin is its USB 5 V. This wire is how the C3's USB-C charges the battery. Nothing else connects to the C3's 5V pin. |
-| C3 **GND** (another GND pad) | TP4056 **IN−** | USB ground for the charger. |
-| C3 **3V3** | BMI160 **3V3** | Powers the sensor from the same 3.3 V line. Use the board's **3V3** pin, not its VIN pin (VIN goes through the breakout's own regulator, which we skip). |
+| boost **OUT+** (5 V) | C3 **5V** | The C3's own regulator makes 3.3 V from it. **Measure the boost output before making this connection** (section 5, step 4). |
+| boost **OUT−** | C3 **GND** | Ground. |
+| C3 **3V3** | BMI160 **3V3** | Powers the sensor from the C3's regulator. Use the board's **3V3** pin, not its VIN pin (VIN goes through the breakout's own regulator, which we skip). |
 | C3 **GND** | BMI160 **GND** | Common ground. |
 | C3 **GPIO6** | BMI160 **SDA** | I²C data line (the two-wire bus the sensor talks over). |
 | C3 **GPIO7** | BMI160 **SCL** | I²C clock line. Runs at 400 kHz. |
@@ -128,6 +118,8 @@ Plain-text version of the same wiring (if the picture does not display, open
 | BMI160 **CS** | 3V3 (high) | Tells the sensor to use I²C rather than SPI. |
 | BMI160 **SAO** (sometimes labelled SDO) | GND (low) | Selects I²C address 0x68, which is what the firmware expects. |
 
+The TP4056's IN+ / IN− pads stay empty: its USB-C port is the input.
+
 Pins to leave alone: **GPIO2, GPIO8, GPIO9**. These are "strapping" pins that
 the C3 reads at power-up to decide how to boot, so loads on them can stop it
 starting. GPIO8 is the onboard LED, which the firmware uses for status only.
@@ -135,27 +127,23 @@ GPIO9 is the BOOT button.
 
 Notes:
 
-- All the minus pads (TP4056 OUT− and IN−, boost IN− and OUT−, buck IN− and
-  OUT−, every C3 GND, BMI160 GND) are one ground. You will confirm with a
-  continuity beep that the TP4056's IN− and OUT− are the same wire on your
-  board (section 5, step 1).
 - The divider taps **OUT+ before the switch**. On a protected TP4056, OUT+ is
   electrically the same wire as B+ (the battery positive), so the reading is
-  the true battery voltage, and it works with the switch OFF while charging
-  from USB.
+  the true battery voltage.
 - The divider draws about 18 µA from the battery all the time, even with the
-  switch off. That is negligible, but it is why you should not leave the
+  switch off (with the switch off, a few more µA leak into the unpowered C3
+  through GPIO4). That is negligible, but it is why you should not leave the
   battery for months without charging.
-- **Low battery.** The boost keeps the 3.3 V steady almost until the battery
-  is empty, so the device keeps working well below the point where a LiPo
-  should be recharged; the TP4056's protection only cuts it off at about
-  2.5 V, which is hard on the cell. So: when the LED blinks fast or the app
-  says "Low battery" (below 3.5 V), stop and charge. Do not leave the device
-  switched on overnight.
-- The boost and buck switch at high frequency, which can add electrical noise.
-  Keep them at the far end of the box from the sensor if you can. The soak
-  test (section 8) measures the sensor's noise at rest, so you will see if it
-  matters.
+- **Low battery.** The boost keeps the 5 V steady almost until the battery is
+  empty, so the device keeps working well below the point where a LiPo should
+  be recharged; the TP4056's protection only cuts it off at about 2.5 V, which
+  is hard on the cell. So: when the LED blinks fast or the app says "Low
+  battery" (below 3.5 V), stop and charge. Do not leave the device switched
+  on overnight.
+- The boost switches at high frequency, which can add electrical noise; the
+  C3's regulator after it smooths most of that out. Keep the boost at the far
+  end of the box from the sensor if you can. The soak test (section 8)
+  measures the sensor's noise at rest, so you will see if it matters.
 
 ## 4. Before you solder: check the BMI160 pin labels
 
@@ -209,7 +197,7 @@ Three principles:
   battery is attached, OUT+ and B+ are always live.
 - **Switch OFF while soldering anything after the switch**, every time, and
   unplug the battery's connector if you have one.
-- Test each stage before the next one hides it. In particular, **the buck's
+- Test each stage before the next one hides it. In particular, **the boost's
   output is measured before it ever touches the C3.**
 
 ### Step 1: the TP4056 board (mandatory charge-current fix, no battery)
@@ -223,9 +211,8 @@ sold with a **1.2 kΩ** resistor, which means **1000 mA**. Your battery holds
 only 300 mAh, so 1000 mA is about 3.3 times its capacity per hour (3.3 C).
 Normal LiPo cells are meant to be charged at 1 C or less (300 mA here). Charging
 at 3.3 C makes the cell hot, wears it out fast and can make it swell or catch
-fire. It would also pull about 1 A through the C3's USB port, more than a
-computer port gives. So before it ever sees the battery, change the resistor
-to **4.7 kΩ**: 1200 ÷ 4.7 ≈ **255 mA**, under 1 C.
+fire. So before it ever sees the battery, change the resistor to **4.7 kΩ**:
+1200 ÷ 4.7 ≈ **255 mA**, under 1 C.
 
 1. Find the **TP4056 chip**: an 8-pin chip with "TP4056" printed on it.
    Pin 1 is at the dot or the corner marked on the chip; pin 2 is the next pin
@@ -249,11 +236,8 @@ to **4.7 kΩ**: 1200 ÷ 4.7 ≈ **255 mA**, under 1 C.
 6. Confirm the board is the **protected** kind: two extra small chips near
    the TP4056 marked **DW01A** and **8205A**. If you cannot find them, do not
    use the board.
-7. Three continuity checks (multimeter on the beep setting):
+7. Two continuity checks (multimeter on the beep setting):
    - **B+ to OUT+: beeps.** Same wire.
-   - **IN− to OUT−: beeps.** Same wire (the circuit's ground). This matters
-     because the C3's ground goes to IN−. **If IN− beeps to B− instead, stop
-     and tell me:** on that board the wiring would bypass the protection.
    - **B− to OUT−: no beep.** The protection chip sits between them; they must
      never be joined.
 
@@ -266,10 +250,6 @@ enough to reach where each part will sit in the box.
 2. **OUT−**: a black wire (to the boost's IN−).
 3. **OUT+** again: one leg of the first **100 kΩ** divider resistor (or a
    short wire to it). Cover it with heat-shrink, leaving the other end free.
-4. **IN+**: a wire to go to the C3's **5V** pin later (use a colour you will
-   not mix up with the 3.3 V wire; it carries USB 5 V).
-5. **IN−**: a black wire to go to a C3 **GND** pad later.
-6. Put tape over the TP4056's own USB-C port so nobody plugs into it.
 
 ### Step 3: attach the battery
 
@@ -296,10 +276,16 @@ enough to reach where each part will sit in the box.
    free ends taped until you solder them.
 4. Measure between **OUT+** and **OUT−**: the battery voltage (3.3 to
    4.2 V). 0 V here is normal on some protected boards until a charger has
-   been connected once; it will come alive when you first plug USB into the
-   C3 in section 7.
+   been connected once.
+5. **Charge test.** Plug a charger into the **TP4056's** USB-C port. One LED
+   should show charging (usually red), turning off or changing to a different
+   colour (usually green or blue) when full. At about 255 mA a flat 300 mAh
+   cell takes roughly 1.5 to 2 hours. Check by touch after a few minutes that
+   the cell and the TP4056 chip are only warm, not hot. If hot, unplug and
+   recheck the 4.7 kΩ resistor. Some USB-C TP4056 boards do not charge from a
+   USB-C to USB-C charger; use a **USB-A to USB-C** cable then.
 
-### Step 4: switch, boost and buck, then measure (no C3 yet)
+### Step 4: switch and boost, then measure (no C3 yet)
 
 *Switch OFF while soldering; unplug the battery if you have a connector.*
 
@@ -307,39 +293,32 @@ enough to reach where each part will sit in the box.
    outer pin of a 3-pin switch). Cover the joints with heat-shrink.
 2. Switch side of the red wire to the **boost IN+**; the black OUT− wire to
    the **boost IN−**.
-3. If your boost board has voltage jumpers, set it to **5 V**.
-4. **Boost OUT+** to **buck IN+**, **boost OUT−** to **buck IN−** (short
-   wires).
-5. Solder a red-ish wire to **buck OUT+** and a black wire to **buck OUT−**,
-   long enough to reach the C3. Leave their ends **free and apart** for now.
-6. **Measure.** Battery plugged in, switch **ON**:
-   - boost OUT+ to OUT−: **4.9 to 5.3 V**;
-   - buck OUT+ to OUT−: **3.25 to 3.35 V**.
-7. **Load test.** Hold the **47 Ω** resistor across the buck's OUT+ and OUT−
-   wires (it draws about 70 mA, a bit more than the device uses) and measure
-   again: still **3.2 V or more**. It gets warm within a few seconds; that is
-   normal. Remove it.
-8. Switch **OFF**.
+3. If your boost board has voltage jumpers or a trimmer, set it to **5 V**.
+4. Solder a wire to **boost OUT+** and a black wire to **boost OUT−**, long
+   enough to reach the C3. Leave their ends **free and apart** for now.
+5. **Measure.** Battery plugged in, switch **ON**: boost OUT+ to OUT−,
+   **4.9 to 5.3 V**.
+6. **Load test.** Hold the **100 Ω** resistor across the boost's OUT+ and
+   OUT− wires (it draws about 50 mA, about what the device uses) and measure
+   again: still **4.75 V or more**. It gets warm within a few seconds; that
+   is normal. Remove it.
+7. Switch **OFF**.
 
-**If the buck output is above 3.45 V or reads near 5 V, stop: do not connect
-it to the C3.** 5 V on the 3V3 pin destroys the C3 and the sensor. If it is
-below 3.2 V under load, the boost is probably not giving 5 V: check the boost
-output under the same load. Tell me the numbers either way.
+**If the boost output is above 5.5 V, stop: do not connect it to the C3.**
+The C3's regulator is rated for about 6 V at most. Tell me the numbers either
+way.
 
 ### Step 5: the C3 connections
 
 *Switch OFF, battery unplugged if you have a connector.*
 
-1. **Buck OUT+** to the C3 **3V3** pad. **Buck OUT−** to a C3 **GND** pad.
-2. The **IN+** wire from the TP4056 to the C3 **5V** pad.
-3. The **IN−** wire from the TP4056 to another C3 **GND** pad (two wires on
-   one GND pad is fine too).
-4. The divider: solder the free end of the first 100 kΩ (the one on OUT+) to
+1. **Boost OUT+** to the C3 **5V** pad. **Boost OUT−** to a C3 **GND** pad.
+2. The divider: solder the free end of the first 100 kΩ (the one on OUT+) to
    one end of the second 100 kΩ. Solder the other end of the second resistor
    to a C3 **GND** pad (or any ground wire). Solder a short wire from the
    **junction between the two resistors** to **GPIO4**. Cover each bare joint
    with heat-shrink or Kapton tape so nothing shorts.
-5. **Do not** connect anything to GPIO2, GPIO8 or GPIO9.
+3. **Do not** connect anything to GPIO2, GPIO8 or GPIO9.
 
 ### Step 6: the sensor
 
@@ -357,11 +336,10 @@ output under the same load. Tell me the numbers either way.
 *Switch OFF, battery unplugged if you have a connector.*
 
 1. Multimeter in continuity mode: no solder bridges between neighbouring pads
-   (SDA to SCL should not beep). C3 **3V3** to **GND** should not beep (the
-   meter may chirp for an instant as capacitors charge; a steady beep is a
-   short). C3 **5V** to **GND** should not beep.
-2. Visual check: the only wire on the C3's **5V** pad is the one from the
-   TP4056's **IN+**; the buck's output goes to **3V3**, not 5V.
+   (SDA to SCL should not beep). C3 **5V** to **GND** and C3 **3V3** to
+   **GND** should not beep (the meter may chirp for an instant as capacitors
+   charge; a steady beep is a short).
+2. Visual check: the boost's output goes to the C3's **5V** pad, not 3V3.
 
 Then flash the firmware (section 6) and do the power-up checks (section 7)
 with everything still loose on the desk. It is far easier to fix a wire now
@@ -372,11 +350,10 @@ than inside the box.
 "Flashing" means copying the program onto the C3. You only do it once, or
 again when the firmware is updated.
 
-> **RULE: Slide switch OFF whenever a USB cable is in the C3.**
+> **RULE: Slide switch OFF while any USB cable is plugged in.**
 
-With the switch off, the C3 runs from the USB cable (and the battery
-charges at the same time). It makes no difference whether the battery is
-attached.
+With the switch off, the C3 runs from the USB cable, which is what you want
+while flashing. It makes no difference whether the battery is attached.
 
 1. Use **desktop Chrome or Edge** (Safari, Firefox and Android Chrome do not
    work for this). The page needs the firmware to be published first; see
@@ -390,9 +367,11 @@ attached.
 5. If the C3 does not show up in the list: unplug it, **hold the BOOT button**
    (tiny button on the board), plug it back in while holding it, release, then
    try again.
+6. When done, unplug the cable **before** switching the device on.
 
 **Reflashing later, with the device in its box:** same thing. Switch OFF,
-plug into the C3's port, flash.
+plug into the C3's port ("C3: switch OFF first"), flash, unplug, then switch
+on.
 
 For developers (needs PlatformIO and the repo checked out; the same rule
 applies, switch OFF first):
@@ -408,26 +387,17 @@ solid on = connected, fast blink 5 Hz = **low battery (below 3500 mV)**. Low
 battery **overrides** the other two: if the battery reads below 3500 mV, the
 LED fast-blinks even while connected.
 
-**Part A: on USB (switch OFF).** Right after flashing, cable still in.
+**Part A: C3 on USB (switch OFF).** Right after flashing, cable still in.
 
-1. **Charging LED.** The TP4056's charge LED lights (usually red), even
-   though the cable is in the C3: that is the C3's 5V pin feeding the
-   charger's IN+. If the battery is already full it shows the "full" colour
-   (usually green or blue) instead. Feel the TP4056 chip and the cell after a
-   few minutes: warm is fine, hot is not (unplug, recheck the 4.7 kΩ). At
-   about 255 mA a flat 300 mAh cell takes roughly 1.5 to 2 hours.
-2. **USB voltage at the charger.** Measure TP4056 **IN+** to **IN−**: about
-   4.6 to 5.1 V.
-3. **Record page connects.** On an Android phone with Bluetooth and location
+1. **Record page connects.** On an Android phone with Bluetooth and location
    switched on, open Chrome and go to
    <https://matias-ceau.github.io/power-kettle/record.html>. Tap **Connect**,
    pick **PowerKettle**.
-4. **Battery mV is plausible**: within about 50 to 100 mV of your multimeter
-   reading at OUT+ to OUT−. While charging it reads higher than the battery's
-   resting voltage and climbs towards 4200 mV; that is normal. If it is below
-   3500 mV the LED fast-blinks and the page shows "Low battery": leave it
-   charging.
-5. **Start recording** and watch the readouts for 10 to 20 seconds with the
+2. **Battery mV is plausible**: within about 50 to 100 mV of your multimeter
+   reading at OUT+ to OUT− (the divider reads the battery even with the
+   switch off). Below 3500 mV the LED fast-blinks and the page shows "Low
+   battery": charge first (TP4056 port, switch OFF).
+3. **Start recording** and watch the readouts for 10 to 20 seconds with the
    sensor lying still:
    - **Samples** keeps climbing.
    - **Rate (Hz)** settles at about **400** (anything within about 396 to 404
@@ -437,7 +407,7 @@ LED fast-blinks even while connected.
      (A Runs count above 1 means the Bluetooth link dropped and the page
      reconnected; data around each drop is lost.)
    - No "Bluetooth MTU too small" or "Device is not streaming" banner.
-6. **Bluetooth packet size (serial log).** Open the serial monitor (see the
+4. **Bluetooth packet size (serial log).** Open the serial monitor (see the
    end of this section) and connect the record page again. The log must show
    `[ble] mtu 247 -> 19 samples/packet` shortly after `[ble] connected`. A
    smaller MTU (for example `mtu 23 -> 1 samples/packet`) means the phone did
@@ -446,15 +416,21 @@ LED fast-blinks even while connected.
 
 **Part B: on battery (USB unplugged).**
 
-7. Unplug the cable, then **switch ON**: within a couple of seconds the LED
+5. Unplug the cable, then **switch ON**: within a couple of seconds the LED
    blinks slowly (or fast, if the battery is below 3500 mV: charge it).
-8. Measure C3 **3V3** to **GND**: **3.25 to 3.35 V**.
-9. Connect with the record page: LED solid, battery reading close to the
+6. Measure C3 **5V** to **GND**: about **5 V**; C3 **3V3** to **GND**: about
+   **3.3 V**.
+7. Connect with the record page: LED solid, battery reading close to the
    multimeter at OUT+. Do one short recording (Start, wait 20 s, Stop & save),
    then check the file with `python -m powerkettle info FILE.pkraw` (see
    [recording-protocol.md](recording-protocol.md) for how to get it onto a
    computer). You want 1 run, about 400 Hz, 0 gaps.
-10. Switch OFF: the LED goes out.
+8. Switch OFF: the LED goes out.
+
+**Part C: charging.**
+
+9. Switch OFF, plug a charger into the **TP4056's** USB-C port: the charging
+   LED lights up (or shows "full").
 
 If the sensor is not found, the serial log shows the problem. Open the serial
 monitor (`pio device monitor -b 115200` or any serial terminal at **115200
@@ -467,9 +443,8 @@ A soak test checks that nothing falls over during a long recording. It
 catches loose wires, a bad Bluetooth setup, a flaky battery, or a noisy power
 supply.
 
-1. Fully charge the LiPo (cable in the C3, **switch OFF**, until the
-   TP4056's LED shows "full"). Unplug. Put the sensor on the desk, **not
-   moving**.
+1. Fully charge the LiPo (TP4056 port, **switch OFF**, until its LED shows
+   "full"). Unplug. Put the sensor on the desk, **not moving**.
 2. Switch ON. Put the phone next to it (within 1 m) with the screen on and
    Chrome in the foreground. Turn off battery saver. The record page keeps the
    screen awake by itself.
@@ -501,16 +476,16 @@ supply.
 | `quietest 1 s:` `\|acc\|` | **0.95 to 1.05 g** (gravity; the sensor's own offset accounts for the spread) |
 
 The noise figures are my estimates from the BMI160 datasheet, so your first
-numbers become the baseline. If the noise is clearly above them, the boost or
-buck is probably leaking switching noise into the sensor: move them away from
-the BMI160, or solder a 10 µF capacitor between the BMI160's 3V3 and GND
-pins, and repeat.
+numbers become the baseline. If the noise is clearly above them, the boost is
+probably leaking switching noise into the sensor: move it away from the
+BMI160, or solder a 10 µF capacitor between the BMI160's 3V3 and GND pins,
+and repeat.
 
 Also write down the **battery drop** (mV at start minus mV at end). A healthy
-cell should lose only a small amount in 30 minutes (a few tens of mV is my
-expectation; the boost and buck cost a bit more than a plain regulator would),
-so your number becomes the baseline. A drop of 200 mV or more suggests an old
-cell or extra current draw. Keep the numbers; they tell you the real runtime.
+cell should lose only a small amount in 30 minutes (my expectation is a few
+tens of mV, but this is a first measurement, so your number becomes the
+baseline). A drop of 200 mV or more suggests an old cell or extra current
+draw. Keep the numbers; they tell you the real runtime.
 
 If it does not pass: more than 1 run means the phone and sensor disconnected;
 gaps mean data was lost (phone too far away, Chrome in the background, battery
@@ -552,15 +527,16 @@ Gluing a magnet to the wrong spot is annoying. Test first:
    out of the bell's face, which the analysis relies on. It does not matter
    how the box is rotated on the face; the app handles that at the start of
    every session.
-2. Put the C3, charger board, boost, buck and battery in the box, with the
-   boost and buck at the **far end from the sensor** if you can. Keep wires
-   short and tidy, and make sure the **slide switch** and the **C3's USB-C**
+2. Put the C3, charger board, boost and battery in the box, with the boost
+   at the **far end from the sensor** if you can. Keep wires short and tidy,
+   and make sure the **slide switch** and the **TP4056's USB-C** (charging)
    are reachable through cutouts (small holes you make with a hobby knife or
-   rotary tool). The C3's port is the only one you need: it charges and
-   flashes. Cover bare solder joints and the underside of the boards with
-   Kapton tape so nothing shorts against anything else inside the box.
-3. **Label the box** next to the C3's port: "**USB: switch OFF first**".
-   Leave the TP4056's own port covered (tape), not reachable from outside.
+   rotary tool). Cover bare solder joints and the underside of the boards
+   with Kapton tape so nothing shorts against anything else inside the box.
+3. Make sure the C3's USB-C is reachable if you want to reflash later, or
+   plan to open the box. **Label the two USB ports on the outside of the
+   box**: "**C3: switch OFF first**" on the C3's port and "**CHARGE (switch
+   OFF)**" on the TP4056's port.
 
 ### Magnet
 
@@ -599,16 +575,14 @@ one-time setup in the repository settings:
 
 ## 11. Troubleshooting
 
-> **RULE: Slide switch OFF whenever a USB cable is in the C3. Charge and
-> flash through the C3's USB-C only.**
+> **RULE: Slide switch OFF while any USB cable is plugged in.**
 
 | Symptom | Likely cause and fix |
 |---|---|
-| Nothing happens when switched on (USB unplugged), no LED | Battery flat or not connected: check OUT+ to OUT− (0 V on a new board until USB has been plugged in once). Then follow the chain with the switch ON: boost IN+ (battery voltage), boost OUT+ (about 5 V), buck OUT+ and C3 3V3 (about 3.3 V). The first place the voltage is missing is the fault. |
-| C3 3V3 reads well below 3.2 V on battery | Boost not giving 5 V under load (check its output with the device running), or a weak or nearly empty battery. |
-| No charging LED with the cable in the C3 | IN+ wire not on the C3's 5V pad, or IN− not on GND. Check TP4056 IN+ to IN− reads about 5 V with the cable in. A charge-only cable still charges, so if this fails with every cable, it is the wiring. |
+| Nothing happens when switched on (USB unplugged), no LED | Battery flat or not connected: check OUT+ to OUT− (0 V on a new board until a charger has been plugged in once). Then follow the chain with the switch ON: boost IN+ (battery voltage), boost OUT+ and C3 5V (about 5 V), C3 3V3 (about 3.3 V). The first place the voltage is missing is the fault. |
+| C3 5V reads well below 4.75 V on battery | Boost not keeping up under load, or a nearly empty battery. |
 | C3 not listed in the flash dialog | Charge-only USB cable. Use another. Or hold BOOT while plugging in. Also check the slide switch is OFF. |
-| LED blinks fast | Low battery: the reading is below 3500 mV. Low battery overrides "solid when connected", so it blinks fast even while connected. Charge (cable in the C3, switch OFF). |
+| LED blinks fast | Low battery: the reading is below 3500 mV. Low battery overrides "solid when connected", so it blinks fast even while connected. Charge the battery (switch OFF, TP4056 port). |
 | LED blinks slowly, phone cannot find "PowerKettle" | Bluetooth and location off on the phone; another phone is already connected; or you are not using Chrome. |
 | Record page says no Web Bluetooth | Use Chrome on Android (not Firefox, not an in-app browser). |
 | Rate far from 400 Hz, or no samples | Sensor not talking. See next row. |
@@ -616,6 +590,7 @@ one-time setup in the repository settings:
 | Battery mV reads 0 | Divider not connected to OUT+ or GPIO4, or a broken resistor joint. |
 | Battery mV reads about double or half | Check both resistors are really 100 kΩ and the midpoint goes to GPIO4. |
 | Charging LED never goes out, or the cell or TP4056 chip gets hot | Unplug. Check the 4.7 kΩ charge-current resistor was really fitted (pin 2 to ground reads about 4.7 kΩ), and that the switch was OFF while charging (with it ON, the charger never sees the battery as full). |
-| Soak test noise well above the expected values | Switching noise from the boost or buck: move them away from the sensor, add a 10 µF capacitor across the BMI160's 3V3 and GND, or check for a loose ground wire. |
+| Charger does nothing with a USB-C to USB-C cable | The board may lack the CC resistors on its USB-C port. Use a USB-A to USB-C cable. |
+| Soak test noise well above the expected values | Switching noise from the boost: move it away from the sensor, add a 10 µF capacitor across the BMI160's 3V3 and GND, or check for a loose ground wire. |
 | Gaps in a recording | Phone too far, Chrome in the background, battery saver on. |
 | Device resets or disconnects when moved | Loose wire or solder joint. Strain-relieve the wires. |
