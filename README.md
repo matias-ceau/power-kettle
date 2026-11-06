@@ -25,11 +25,12 @@ recordings. The analysis comes in milestone 2.
   repository settings, Pages, Source must be set to **GitHub Actions** (see the
   build guide).
 
-## Safety rule for the device
+## Charging and flashing
 
-**Slide switch OFF while any USB cable is plugged in.** Charge through the
-TP4056's USB-C port; the C3's USB-C is for flashing. See the build guide for
-why, and for the mandatory charge-current resistor change on the TP4056 board.
+Charge through the TP4056's USB-C port (the device switches itself off while
+charging); flash through the C3's USB-C. Either can be plugged in with the slide
+switch on or off. See the build guide, including the mandatory charge-current
+resistor change on the TP4056 board.
 
 ## Checking a recording
 

@@ -59,16 +59,18 @@ can be re-analysed when the algorithms improve.
 | ESP32-C3 SuperMini | Owned. BLE 5, USB-C (flashing, serial log). Powered on its 5V pin from the boost; its onboard LDO makes 3.3 V. |
 | BMI160 breakout (purple GY-BMI160) | Owned. ±16 g accel, ±2000 °/s gyro, 1 KB FIFO. Chosen over the MPU-9250 board: smaller, current part (MPU-9250 discontinued, boards often relabelled MPU-6500 clones), and a magnetometer is useless on an iron bell. |
 | 1S LiPo ~300 mAh (e.g. 402535) | ~3 h streaming through boost + LDO (measured by the soak test). |
-| TP4056 USB-C charger **with protection** (DW01A + 8205A, 6-pad) | Charging + over-discharge protection. Its own USB-C port is the charging port (IN± pads unused). **Charge-current fix (mandatory):** modules ship with R_PROG = 1.2 kΩ (I ≈ 1200/R = 1000 mA ≈ 3.3C for a 300 mAh cell); replace it (next to TP4056 pin 2, marked "122") with **4.7 kΩ** (≈ 255 mA, below 1C). Charge with the slide switch OFF so charge termination works. |
+| TP4056 USB-C charger **with protection** (DW01A + 8205A, 6-pad) | Charging + over-discharge protection. Its own USB-C port is the charging port (IN± pads unused). **Charge-current fix (mandatory):** modules ship with R_PROG = 1.2 kΩ (I ≈ 1200/R = 1000 mA ≈ 3.3C for a 300 mAh cell); replace it (next to TP4056 pin 2, marked "122") with **4.7 kΩ** (≈ 255 mA, below 1C). Charge termination works because the MOSFET below disconnects the load while charging. |
 | 4.7 kΩ resistor (SMD) | Replaces R_PROG on the TP4056 (see above). |
 | Small 5 V boost | Owned. Battery (3.0–4.2 V) → 5 V into the C3 5V pin. Its output stage blocks reverse current, so USB VBUS from the C3's port cannot reach the battery (no diode needed). An adjustable XL6009-type replacement must be set to 5.0 V before connecting. |
-| Slide switch | Battery on/off, before the boost. |
-| 2 × 100 kΩ | Battery voltage divider. |
+| P-MOSFET AO3401A / Si2301 (SOT-23) + 100 kΩ gate pull-down | Automatic load cut-off: S on the switch side, D to boost IN+, G to TP4056 IN+ (charger VBUS) with 100 kΩ to GND. Charger present → V_GS ≈ +0.8 V, off (body diode blocks battery → boost); absent → V_GS ≈ −V_bat, on. The device turns itself off while charging, so the charger terminates. |
+| Schottky diode SS14 / 1N5817 | Boost OUT+ → C3 5V (cathode at the C3). OR-ing with C3 USB VBUS: with a cable in the C3, VBUS (5.0 V) beats the boost (≈ 4.7 V after the diode) and cannot back-feed the boost. |
+| Slide switch | Main battery on/off, before the MOSFET. |
+| 3 × 100 kΩ | Battery voltage divider (2) and MOSFET gate pull-down (1). |
 | Pot magnet 20–25 mm, countersunk | Shear ≈ 30 N vs ≈ 7 N for a ~30 g device at 20 g impact. |
 | Small ABS project box (~60 × 40 × 20 mm), epoxy | No 3D printer available. |
 
-Power path (the lifter's layout): LiPo → TP4056 B± ; TP4056 OUT+ → switch → boost
-(5 V) → C3 5V pin → onboard LDO (3.3 V) → C3 + BMI160. Boost ≈ 90 % × LDO 3.3/5 ≈ 60 %
+Power path (the lifter's layout): LiPo → TP4056 B± ; TP4056 OUT+ → switch → P-MOSFET → boost
+(5 V) → Schottky → C3 5V pin → onboard LDO (3.3 V) → C3 + BMI160. Boost ≈ 90 % × LDO 3.3/4.7 ≈ 63 %
 overall; accepted for simplicity with parts on hand.
 
 Consequences:
@@ -76,8 +78,8 @@ Consequences:
 - The rail stays regulated almost down to the DW01A cut-off (≈ 2.5 V), so the device
   no longer browns out near empty. The 3500 mV low-battery warning is the user's cue
   to stop and charge.
-- Rule: slide switch OFF while any USB cable is plugged in (C3 port: otherwise the
-  boost and VBUS both drive the 5V pin; TP4056 port: so charging terminates).
+- No switch rule for USB: either port can be plugged in with the switch on or off
+  (MOSFET cut-off for the TP4056 port, diode OR-ing for the C3 port).
 - The boost output is verified (4.9–5.3 V, ≥ 4.75 V at 50 mA, never above 5.5 V)
   before it is connected to the C3.
 
@@ -86,9 +88,11 @@ Consequences:
 | From | To |
 |---|---|
 | LiPo | TP4056 B+ / B− |
-| TP4056 OUT+ | slide switch → boost IN+ |
+| TP4056 OUT+ | slide switch → MOSFET S; MOSFET D → boost IN+ |
+| TP4056 IN+ (charger VBUS) | MOSFET G; G → 100 kΩ → GND |
 | TP4056 OUT− | boost IN− (this is circuit ground; B− is the unprotected battery side and is not ground) |
-| boost OUT+ / OUT− | C3 **5V** / **GND** |
+| boost OUT+ | Schottky (cathode at C3) → C3 **5V** |
+| boost OUT− | C3 **GND** |
 | C3 **3V3** | BMI160 **3V3** (bypass its LDO) |
 | C3 GND | BMI160 GND |
 | C3 **GPIO6** | BMI160 **SDA** |
