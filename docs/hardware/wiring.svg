@@ -164,5 +164,5 @@
 
   <!-- Rule -->
   <rect class="rule" x="20" y="752" width="1030" height="32" rx="6"/>
-  <text class="wt" x="535" y="773" text-anchor="middle">Switch positions: ON, and OFF / CHARGE / USB. Any USB cable (TP4056 to charge, C3 to flash) goes in with the switch OFF.</text>
+  <text class="wt" x="535" y="773" text-anchor="middle">Charging: TP4056's USB-C only (the C3's USB-C cannot charge the battery; it is for flashing). Switch OFF for either cable.</text>
 </svg>

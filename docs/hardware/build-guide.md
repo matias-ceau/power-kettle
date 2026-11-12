@@ -89,8 +89,12 @@ smells, disconnect it and stop using it.
 ## 3. Wiring
 
 > **The switch has two positions: "ON" and "OFF / CHARGE / USB".**
-> Any time a USB cable goes in (the TP4056's to charge, or the C3's to flash),
-> the switch is in the OFF position. Label the two positions on the box.
+> Any time a USB cable goes in, the switch is in the OFF position. Label the
+> two positions on the box.
+>
+> **Only the TP4056's USB-C charges the battery.** The C3's USB-C is wired to
+> the boost's output side, so it can power the C3 for flashing but cannot
+> reach the battery.
 >
 > Why: while charging, the switch must be OFF so the charger sees the battery
 > as full and stops. With a cable in the C3 and the switch ON, the boost and
