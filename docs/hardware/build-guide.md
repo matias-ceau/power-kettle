@@ -63,6 +63,7 @@ Power in two lines:
 | **4.7 kΩ resistor** (SMD, same size as the one you are replacing, probably 0805 or 0603) | **Mandatory.** Replaces the TP4056's charge-current resistor so the battery is charged gently (section 5, step 1). | "4.7k ohm resistor SMD 0805" (or 0603) |
 | Small **5 V boost** board | Owned. Battery voltage up to 5 V for the C3's 5V pin. Any small board that starts from 3 V or less and gives at least 200 mA. If you later swap in an adjustable one (XL6009 type), set it to **5.0 V and measure it before connecting the C3**: those can output far more than the C3 survives. | "mini boost 5V 3.7V" |
 | Slide switch | Battery on/off. Small SPDT or SPST slide switch. | "SS12D00 slide switch" or "mini slide switch 3 pin" |
+| 4-LED battery level indicator, **1S** version (optional) | Shows the battery level on the box whenever the switch is ON. Must be the 1S (one cell, 3.7 / 4.2 V) version; many of these boards are set to 1S to 8S by a solder jumper, so check yours is on 1S. | "1S lithium battery capacity indicator 4 LED" |
 | 2 x 100 kΩ resistors | Battery voltage divider (quarter-watt, any 1 % or 5 %). | "100k ohm resistor 1/4W" |
 | 100 Ω resistor, half-watt (test only) | A dummy load to check the boost before it meets the C3 (section 5, step 4). Gets warm; that is normal. | "100 ohm resistor 1/2W" |
 | Pot magnet, 20 to 25 mm, countersunk | Holds the box on the bell. Pull strength matters: about 30 N shear against about 7 N needed. | "pot magnet 25mm countersunk neodymium" |
@@ -106,6 +107,7 @@ Plain-text version of the same wiring (if the picture does not display, open
 |---|---|---|
 | LiPo | TP4056 **B+** / **B−** | Battery connects to the charger board's battery pads. **B− is NOT ground.** Only the battery's negative wire goes to B−; the ground of the circuit is **OUT−**. B− is the unprotected battery side: anything else connected to it bypasses the protection chip. |
 | TP4056 **OUT+** | slide switch → boost **IN+** | The switch cuts power to everything after it. |
+| slide switch output (same point as boost **IN+**) | LED gauge **+**; gauge **−** to ground (boost **IN−**) | Optional. It must sit on the battery side of the boost: after the boost it would always see 5 V. Being after the switch, it is off when the device is off. |
 | TP4056 **OUT−** | boost **IN−** | Ground. |
 | boost **OUT+** (5 V) | C3 **5V** | The C3's own regulator makes 3.3 V from it. **Measure the boost output before making this connection** (section 5, step 4). |
 | boost **OUT−** | C3 **GND** | Ground. |
@@ -140,6 +142,11 @@ Notes:
   is hard on the cell. So: when the LED blinks fast or the app says "Low
   battery" (below 3.5 V), stop and charge. Do not leave the device switched
   on overnight.
+- **LED gauge (optional).** Its LEDs take a few mA for as long as the switch
+  is ON, which costs a few per cent of the runtime. The level it shows dips a
+  little while the device is running, because the battery voltage sags under
+  load; the app's battery reading and the low-battery warning stay the
+  reference.
 - The boost switches at high frequency, which can add electrical noise; the
   C3's regulator after it smooths most of that out. Keep the boost at the far
   end of the box from the sensor if you can. The soak test (section 8)
@@ -294,6 +301,9 @@ enough to reach where each part will sit in the box.
 2. Switch side of the red wire to the **boost IN+**; the black OUT− wire to
    the **boost IN−**.
 3. If your boost board has voltage jumpers or a trimmer, set it to **5 V**.
+   Optional LED gauge: its **+** to the boost **IN+** pad (the switch side of
+   the red wire), its **−** to the boost **IN−** pad. With the switch ON its
+   LEDs should light.
 4. Solder a wire to **boost OUT+** and a black wire to **boost OUT−**, long
    enough to reach the C3. Leave their ends **free and apart** for now.
 5. **Measure.** Battery plugged in, switch **ON**: boost OUT+ to OUT−,

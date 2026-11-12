@@ -60,6 +60,17 @@
   <text class="sub" x="455" y="86" text-anchor="middle">switch</text>
   <path class="w pos" d="M490 82 H530"/>
 
+  <!-- Optional 4-LED battery gauge, across the battery line after the switch (before the boost) -->
+  <circle class="dot" cx="500" cy="82" r="5"/>
+  <path class="w pos" d="M500 82 V116 a6 6 0 0 1 0 12 V165"/>
+  <circle class="dot" cx="520" cy="122" r="5"/>
+  <path class="w gnd" d="M520 122 V165"/>
+  <rect class="part" x="470" y="165" width="100" height="50" rx="6"/>
+  <text class="pin" x="496" y="180" text-anchor="middle">+</text>
+  <text class="pin" x="524" y="180" text-anchor="middle">&#8722;</text>
+  <text class="sub" x="520" y="197" text-anchor="middle">4-LED gauge</text>
+  <text class="sub" x="520" y="210" text-anchor="middle">(1S, optional)</text>
+
   <!-- OUT- to boost IN-, with a hop over the divider wire (no connection there) -->
   <path class="w gnd" d="M370 122 H386 a6 6 0 0 1 12 0 H530"/>
 

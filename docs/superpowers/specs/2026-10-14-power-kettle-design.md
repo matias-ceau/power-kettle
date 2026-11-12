@@ -63,6 +63,7 @@ can be re-analysed when the algorithms improve.
 | 4.7 kΩ resistor (SMD) | Replaces R_PROG on the TP4056 (see above). |
 | Small 5 V boost | Owned. Battery (3.0–4.2 V) → 5 V into the C3 5V pin. Its output stage blocks reverse current, so USB VBUS from the C3's port cannot reach the battery (no diode needed). An adjustable XL6009-type replacement must be set to 5.0 V before connecting. |
 | Slide switch | Battery on/off, before the boost. |
+| 4-LED battery level indicator, 1S (optional) | Across the battery line after the switch, before the boost. On only while the switch is ON; a few mA. |
 | 2 × 100 kΩ | Battery voltage divider. |
 | Pot magnet 20–25 mm, countersunk | Shear ≈ 30 N vs ≈ 7 N for a ~30 g device at 20 g impact. |
 | Small ABS project box (~60 × 40 × 20 mm), epoxy | No 3D printer available. |
@@ -87,6 +88,7 @@ Consequences:
 |---|---|
 | LiPo | TP4056 B+ / B− |
 | TP4056 OUT+ | slide switch → boost IN+ |
+| switch output / boost IN+ | optional LED gauge +; gauge − → GND |
 | TP4056 OUT− | boost IN− (this is circuit ground; B− is the unprotected battery side and is not ground) |
 | boost OUT+ / OUT− | C3 **5V** / **GND** |
 | C3 **3V3** | BMI160 **3V3** (bypass its LDO) |
