@@ -1,13 +1,13 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1070 800" width="1070" height="800" role="img" aria-labelledby="t d" font-family="Helvetica, Arial, sans-serif">
   <title id="t">Power Kettle wiring diagram</title>
-  <desc id="d">LiPo to TP4056 B+ and B-; B- is not ground. TP4056 OUT+ through the slide switch to the source of a P-channel MOSFET; its drain to the 5 V boost input; its gate to TP4056 IN+ (the charger's 5 V) with 100 kilohm to ground, so plugging a charger in disconnects the battery from the boost. Boost 5 V output through a Schottky diode (band towards the C3) to the ESP32-C3 5V pin, whose onboard regulator makes 3.3 V; a cable in the C3's USB-C takes over through the diode. OUT-, the boost minus pads, C3 GND and BMI160 GND are ground. C3 3V3, GND, GPIO6 SDA, GPIO7 SCL and GPIO3 INT1 go to the BMI160. Battery divider from OUT+ before the switch through two 100 kilohm resistors to GPIO4 and ground. BMI160 CS tied high and SAO tied low. Either USB port can be plugged in with the switch on or off.</desc>
+  <desc id="d">LiPo to TP4056 B+ and B-; B- is not ground. TP4056 OUT+ through the slide switch to the 5 V boost input; boost 5 V output to the ESP32-C3 5V pin, whose onboard regulator makes 3.3 V. OUT-, the boost minus pads, C3 GND and BMI160 GND are ground. C3 3V3, GND, GPIO6 SDA, GPIO7 SCL and GPIO3 INT1 go to the BMI160. Battery divider from OUT+ before the switch through two 100 kilohm resistors to GPIO4 and ground. BMI160 CS tied high and SAO tied low. Charging through the TP4056 USB-C port. Rule: slide switch off while any USB cable is plugged in.</desc>
   <style>
     .bg { fill: #fbfaf6; stroke: #333; stroke-width: 1; }
     .box { fill: #eef1f6; stroke: #222; stroke-width: 2; }
     .reg { fill: #e6f2e6; stroke: #222; stroke-width: 2; }
     .part { fill: #e9edf3; stroke: #222; stroke-width: 2; }
     .warn { fill: #fff1c2; stroke: #8a5a00; stroke-width: 2; }
-    .info { fill: #e3f1e3; stroke: #2e6b2e; stroke-width: 2; }
+    .rule { fill: #fde0dc; stroke: #a1261c; stroke-width: 2; }
     .ttl { font-size: 17px; font-weight: bold; fill: #111; }
     .lbl { font-size: 13px; fill: #111; }
     .pin { font-size: 13px; fill: #111; font-weight: bold; }
@@ -20,17 +20,15 @@
     .v33 { stroke: #c2185b; }
     .gnd { stroke: #222; }
     .bm { stroke: #0b7a75; }
-    .gate { stroke: #6b7c93; }
     .sda { stroke: #1f5fbf; }
     .scl { stroke: #1e7a3c; }
     .int { stroke: #b4600a; }
     .mid { stroke: #7b3fa0; }
     .dot { fill: #111; }
-    .dfill { fill: #222; stroke: #222; stroke-width: 2; }
   </style>
 
   <rect class="bg" x="0.5" y="0.5" width="1069" height="799" rx="6"/>
-  <text class="ttl" x="20" y="26">Power Kettle wiring (red = battery, orange = 5 V, pink = 3.3 V, black = ground, grey = MOSFET gate)</text>
+  <text class="ttl" x="20" y="26">Power Kettle wiring (red = battery, orange = 5 V, pink = 3.3 V, black = ground, teal = battery B&#8722; only)</text>
 
   <!-- LiPo -->
   <rect class="box" x="30" y="60" width="120" height="80" rx="6"/>
@@ -44,78 +42,55 @@
   <text class="ttl" x="285" y="66" text-anchor="middle">TP4056</text>
   <text class="sub" x="285" y="160" text-anchor="middle">protected (DW01A + 8205A)</text>
   <text class="sub" x="285" y="176" text-anchor="middle">R_PROG = 4.7 k&#937;</text>
-  <text class="sub" x="270" y="216" text-anchor="middle">USB-C = CHARGE</text>
-  <text class="sub" x="270" y="252" text-anchor="middle">IN&#8722; unused</text>
+  <text class="sub" x="285" y="200" text-anchor="middle">USB-C = CHARGE</text>
+  <text class="sub" x="285" y="216" text-anchor="middle">(switch OFF)</text>
+  <text class="sub" x="285" y="252" text-anchor="middle">IN+ / IN&#8722; unused</text>
   <text class="pin" x="208" y="86">B+</text>
   <text class="pin" x="208" y="126">B&#8722;</text>
   <text class="pin" x="362" y="86" text-anchor="end">OUT+</text>
   <text class="pin" x="362" y="126" text-anchor="end">OUT&#8722;</text>
-  <text class="pin" x="362" y="216" text-anchor="end">IN+</text>
 
   <!-- LiPo to TP4056: + red, B- teal (NOT ground) -->
   <path class="w pos" d="M150 82 H200"/>
   <path class="w bm" d="M150 122 H200"/>
 
-  <!-- OUT+ to switch to MOSFET (S) ; MOSFET (D) to boost -->
+  <!-- OUT+ to switch to boost -->
   <path class="w pos" d="M370 82 H420"/>
-  <rect class="part" x="420" y="66" width="60" height="32" rx="6"/>
-  <text class="sub" x="450" y="86" text-anchor="middle">switch</text>
-  <path class="w pos" d="M480 82 H520"/>
-  <rect class="part" x="520" y="62" width="60" height="40" rx="6"/>
-  <text class="sub" x="550" y="80" text-anchor="middle">P-FET</text>
-  <text class="sub" x="550" y="94" text-anchor="middle">AO3401A</text>
-  <text class="pin" x="508" y="74" text-anchor="middle">S</text>
-  <text class="pin" x="592" y="74" text-anchor="middle">D</text>
-  <text class="pin" x="562" y="116">G</text>
-  <path class="w pos" d="M580 82 H620"/>
+  <rect class="part" x="420" y="66" width="70" height="32" rx="6"/>
+  <text class="sub" x="455" y="86" text-anchor="middle">switch</text>
+  <path class="w pos" d="M490 82 H530"/>
 
   <!-- OUT- to boost IN-, with a hop over the divider wire (no connection there) -->
-  <path class="w gnd" d="M370 122 H386 a6 6 0 0 1 12 0 H620"/>
-
-  <!-- Gate: TP4056 IN+ (charger 5 V) to G, hops over the divider and OUT-; 100 k to GND -->
-  <path class="w gate" d="M370 212 H386 a6 6 0 0 1 12 0 H550 V128 a6 6 0 0 1 0 -12 V102"/>
-  <circle class="dot" cx="550" cy="170" r="5"/>
-  <path class="w gate" d="M550 170 H600 V178"/>
-  <rect class="part" x="588" y="178" width="24" height="44" rx="3"/>
-  <text class="lbl" x="618" y="205">100 k&#937;</text>
-  <path class="w gnd" d="M600 222 V240"/>
-  <path class="w gnd" d="M584 240 H616"/>
-  <path class="w gnd" d="M590 249 H610"/>
-  <path class="w gnd" d="M596 258 H604"/>
-  <text class="sub" x="470" y="204" text-anchor="middle">charger 5 V &#8594; gate</text>
+  <path class="w gnd" d="M370 122 H386 a6 6 0 0 1 12 0 H530"/>
 
   <!-- Boost -->
-  <rect class="reg" x="620" y="40" width="130" height="110" rx="6"/>
-  <text class="ttl" x="685" y="66" text-anchor="middle">Boost</text>
-  <text class="sub" x="685" y="106" text-anchor="middle">set to 5 V</text>
-  <text class="pin" x="628" y="86">IN+</text>
-  <text class="pin" x="628" y="126">IN&#8722;</text>
-  <text class="pin" x="742" y="86" text-anchor="end">OUT+</text>
-  <text class="pin" x="742" y="126" text-anchor="end">OUT&#8722;</text>
+  <rect class="reg" x="530" y="40" width="130" height="110" rx="6"/>
+  <text class="ttl" x="595" y="66" text-anchor="middle">Boost</text>
+  <text class="sub" x="595" y="106" text-anchor="middle">set to 5 V</text>
+  <text class="pin" x="538" y="86">IN+</text>
+  <text class="pin" x="538" y="126">IN&#8722;</text>
+  <text class="pin" x="652" y="86" text-anchor="end">OUT+</text>
+  <text class="pin" x="652" y="126" text-anchor="end">OUT&#8722;</text>
 
-  <!-- Boost 5 V through the diode, and ground, down to the C3's top pins -->
-  <path class="w v5" d="M750 82 H790 V196"/>
-  <polygon class="dfill" points="778,196 802,196 790,218"/>
-  <path class="w gnd" d="M776 221 H804"/>
-  <path class="w v5" d="M790 221 V300"/>
-  <text class="sub" x="810" y="204">SS14</text>
-  <text class="sub" x="810" y="218">band to C3</text>
-  <path class="w gnd" d="M750 122 H760 V300"/>
+  <!-- Boost 5 V and ground down to the C3's top pins -->
+  <path class="w v5" d="M660 82 H730 V300"/>
+  <path class="w gnd" d="M660 122 H690 V300"/>
+  <text class="sub" x="738" y="200">5 V</text>
 
   <!-- ESP32-C3 -->
-  <rect class="box" x="580" y="300" width="220" height="260" rx="6"/>
+  <rect class="box" x="580" y="300" width="200" height="260" rx="6"/>
   <text class="ttl" x="680" y="384" text-anchor="middle">ESP32-C3</text>
   <text class="sub" x="680" y="400" text-anchor="middle">SuperMini</text>
-  <text class="sub" x="665" y="474" text-anchor="middle">USB-C: flashing</text>
-  <text class="sub" x="665" y="488" text-anchor="middle">(takes over via diode)</text>
+  <text class="sub" x="655" y="474" text-anchor="middle">USB-C: flashing only</text>
+  <text class="sub" x="655" y="488" text-anchor="middle">(switch OFF first)</text>
   <text class="pin" x="588" y="444">GPIO4</text>
-  <text class="pin" x="792" y="344" text-anchor="end">3V3</text>
-  <text class="pin" x="792" y="384" text-anchor="end">GND</text>
-  <text class="pin" x="792" y="424" text-anchor="end">GPIO6</text>
-  <text class="pin" x="792" y="464" text-anchor="end">GPIO7</text>
-  <text class="pin" x="792" y="504" text-anchor="end">GPIO3</text>
-  <text class="pin" x="748" y="318" text-anchor="middle">GND</text>
-  <text class="pin" x="788" y="318" text-anchor="middle">5V</text>
+  <text class="pin" x="772" y="344" text-anchor="end">3V3</text>
+  <text class="pin" x="772" y="384" text-anchor="end">GND</text>
+  <text class="pin" x="772" y="424" text-anchor="end">GPIO6</text>
+  <text class="pin" x="772" y="464" text-anchor="end">GPIO7</text>
+  <text class="pin" x="772" y="504" text-anchor="end">GPIO3</text>
+  <text class="pin" x="690" y="318" text-anchor="middle">GND</text>
+  <text class="pin" x="730" y="318" text-anchor="middle">5V</text>
 
   <!-- BMI160 -->
   <rect class="box" x="900" y="300" width="140" height="320" rx="6"/>
@@ -129,14 +104,14 @@
   <text class="pin" x="908" y="584">SAO</text>
 
   <!-- C3 to BMI160 -->
-  <path class="w v33" d="M800 340 H900"/>
-  <path class="w gnd" d="M800 380 H900"/>
-  <path class="w sda" d="M800 420 H900"/>
-  <path class="w scl" d="M800 460 H900"/>
-  <path class="w int" d="M800 500 H900"/>
-  <text class="sub" x="850" y="414" text-anchor="middle">I&#178;C data</text>
-  <text class="sub" x="850" y="454" text-anchor="middle">I&#178;C clock</text>
-  <text class="sub" x="850" y="494" text-anchor="middle">FIFO ready</text>
+  <path class="w v33" d="M780 340 H900"/>
+  <path class="w gnd" d="M780 380 H900"/>
+  <path class="w sda" d="M780 420 H900"/>
+  <path class="w scl" d="M780 460 H900"/>
+  <path class="w int" d="M780 500 H900"/>
+  <text class="sub" x="815" y="414" text-anchor="middle">I&#178;C data</text>
+  <text class="sub" x="815" y="454" text-anchor="middle">I&#178;C clock</text>
+  <text class="sub" x="815" y="494" text-anchor="middle">FIFO ready</text>
 
   <!-- CS tied high, SAO tied low -->
   <path class="w v33" d="M900 540 H870"/>
@@ -146,12 +121,12 @@
 
   <!-- Battery divider, tapped on OUT+ before the switch -->
   <circle class="dot" cx="392" cy="82" r="5"/>
-  <path class="w pos" d="M392 82 V250"/>
-  <rect class="part" x="377" y="250" width="30" height="56" rx="3"/>
-  <text class="lbl" x="414" y="283">100 k&#937;</text>
-  <text class="sub" x="414" y="330">divider taps OUT+</text>
-  <text class="sub" x="414" y="344">(before the switch)</text>
-  <path class="w mid" d="M392 306 V470"/>
+  <path class="w pos" d="M392 82 V170"/>
+  <rect class="part" x="377" y="170" width="30" height="60" rx="3"/>
+  <text class="lbl" x="414" y="205">100 k&#937;</text>
+  <text class="sub" x="414" y="256">divider taps OUT+</text>
+  <text class="sub" x="414" y="270">(before the switch)</text>
+  <path class="w mid" d="M392 230 V470"/>
   <circle class="dot" cx="392" cy="440" r="5"/>
   <path class="w mid" d="M392 440 H580"/>
   <text class="lbl" x="486" y="432" text-anchor="middle">half the battery voltage</text>
@@ -171,13 +146,12 @@
   <text class="note" x="40" y="246">Ground = OUT&#8722;.</text>
 
   <!-- Notes -->
-  <text class="note" x="30" y="654">Measure the boost output (4.9 to 5.3 V, never above 5.5 V) BEFORE wiring it to the C3. It goes via the diode to the C3's 5V pin, not 3V3.</text>
-  <text class="note" x="30" y="672">MOSFET: S to the switch, D to the boost, G to TP4056 IN+ and 100 k&#937; to ground. S and D swapped = no cut-off.</text>
-  <text class="note" x="30" y="690">Ground: TP4056 OUT&#8722;, boost &#8722; pads, C3 GND, BMI160 GND. Wire hop = no connection.</text>
+  <text class="note" x="30" y="672">Measure the boost output (4.9 to 5.3 V, never above 5.5 V) BEFORE wiring it to the C3. It goes to the C3's 5V pin, not 3V3.</text>
+  <text class="note" x="30" y="690">Ground: TP4056 OUT&#8722;, boost &#8722; pads, C3 GND, BMI160 GND. Black wire hop = no connection.</text>
   <text class="note" x="30" y="708">The C3's own regulator makes the 3.3 V. The BMI160 is fed from the C3's 3V3 pin, not its VIN pin.</text>
   <text class="note" x="30" y="726">Do not use GPIO2, GPIO8 or GPIO9. Check the CS / SAO labels on your board's silkscreen.</text>
 
-  <!-- Info -->
-  <rect class="info" x="20" y="752" width="1030" height="32" rx="6"/>
-  <text class="wt" x="535" y="773" text-anchor="middle">Either USB port can be plugged in with the switch on or off: charging switches the device off (MOSFET); a cable in the C3 takes over (diode).</text>
+  <!-- Rule -->
+  <rect class="rule" x="20" y="752" width="1030" height="32" rx="6"/>
+  <text class="wt" x="535" y="773" text-anchor="middle">Switch positions: ON, and OFF / CHARGE / USB. Any USB cable (TP4056 to charge, C3 to flash) goes in with the switch OFF.</text>
 </svg>

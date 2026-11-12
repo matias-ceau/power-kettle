@@ -25,12 +25,12 @@ recordings. The analysis comes in milestone 2.
   repository settings, Pages, Source must be set to **GitHub Actions** (see the
   build guide).
 
-## Charging and flashing
+## Switch, charging and flashing
 
-Charge through the TP4056's USB-C port (the device switches itself off while
-charging); flash through the C3's USB-C. Either can be plugged in with the slide
-switch on or off. See the build guide, including the mandatory charge-current
-resistor change on the TP4056 board.
+The slide switch has two positions: **ON** and **OFF / CHARGE / USB**. Charge
+through the TP4056's USB-C port with the switch OFF. The C3's USB-C is only for
+flashing the firmware, also with the switch OFF. See the build guide for why,
+and for the mandatory charge-current resistor change on the TP4056 board.
 
 ## Checking a recording
 
